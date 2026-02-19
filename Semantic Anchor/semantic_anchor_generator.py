@@ -54,8 +54,8 @@ DEFAULT_CONFIG = {
         ),
     },
     "thresholds": {
-        "match_threshold": "0.55",
-        "warning_threshold": "0.45",
+        "match_threshold": "0.65",
+        "warning_threshold": "0.55",
     },
 }
 
@@ -88,31 +88,44 @@ Given a PROPOSITION (a formal description of a type of message), generate
 positive examples: messages that SHOULD match this proposition.
 
 Rules:
-- Each example must be a realistic message a user might actually type
+- Each example must be realistic for the requested speaker role
 - Examples must genuinely match the proposition's semantic intent
-- Spread examples evenly across the requested categories
 - Vary sentence length, formality, tone, and structure
 - Include edge cases and subtle variations
 - Do NOT include negatives, refusals, or non-matching examples
 - Do NOT include meta-commentary or explanations
 
-Output ONLY valid JSON in this exact format:
-{
-  "categories": {
-    "Category Name 1": [
-      "example message 1",
-      "example message 2"
-    ],
-    "Category Name 2": [
-      "example message 3",
-      "example message 4"
-    ]
-  }
-}
+Output ONLY valid JSON exactly in the structure requested by the user prompt.
 """
 
 
-def build_generation_prompt(proposition, categories, num_examples):
+def infer_proposition_actor(proposition):
+    """Infer whether the proposition targets user messages or assistant messages."""
+    p = proposition.strip().lower()
+    has_user = "user" in p
+    has_assistant = "assistant" in p
+
+    if p.startswith("the assistant") or (has_assistant and not has_user):
+        return "assistant"
+    if p.startswith("the user") or (has_user and not has_assistant):
+        return "user"
+    return "user"
+
+
+def build_generation_prompt(proposition, categories, num_examples, actor):
+    if actor == "assistant":
+        return (
+            'PROPOSITION: "{}"\n\n'
+            "Target speaker: assistant\n"
+            "Generate exactly {} positive examples.\n\n"
+            "Important speaker constraint:\n"
+            "- Every example must look like an assistant (LLM) response to a user.\n"
+            "- Do not write user requests/questions.\n\n"
+            "Do NOT organize examples by categories.\n\n"
+            "Output ONLY valid JSON in this exact format:\n"
+            '{{\n  "examples": [\n    "assistant example 1",\n    "assistant example 2"\n  ]\n}}'
+        ).format(proposition, num_examples)
+
     examples_per_cat = max(2, num_examples // len(categories))
     remainder = num_examples - (examples_per_cat * len(categories))
 
@@ -123,13 +136,98 @@ def build_generation_prompt(proposition, categories, num_examples):
 
     return (
         'PROPOSITION: "{}"\n\n'
+        "Target speaker: user\n"
         'Generate exactly {} positive example messages distributed across these categories:\n'
         '{}\n\n'
         'Total: {} examples.\n\n'
-        'Each example should be a message that a user (or assistant, depending on the proposition) '
-        'might realistically produce, and that genuinely matches the proposition\'s semantic intent.\n\n'
+        "Important speaker constraint:\n"
+        "- Every example must look like a message a user might write.\n"
+        "- Do not write assistant answers.\n\n"
+        'Each example must genuinely match the proposition\'s semantic intent.\n\n'
+        'Output ONLY valid JSON in this exact format:\n'
+        '{{\n'
+        '  "categories": {{\n'
+        '    "Category Name 1": [\n'
+        '      "example message 1",\n'
+        '      "example message 2"\n'
+        "    ]\n"
+        "  }}\n"
+        "}}\n\n"
         'Remember: output ONLY the JSON object, nothing else.'
     ).format(proposition, num_examples, "\n".join(cat_instructions), num_examples)
+
+
+def normalize_anchors_payload(data, actor):
+    if isinstance(data, dict) and isinstance(data.get("categories"), dict):
+        candidate = data["categories"]
+    elif isinstance(data, dict) and isinstance(data.get("examples"), list):
+        label = "Assistant responses" if actor == "assistant" else "General"
+        candidate = {label: data["examples"]}
+    elif isinstance(data, dict) and all(isinstance(v, list) for v in data.values()):
+        candidate = data
+    elif isinstance(data, list):
+        label = "Assistant responses" if actor == "assistant" else "General"
+        candidate = {label: data}
+    else:
+        raise ValueError("Unsupported anchor JSON structure returned by model.")
+
+    cleaned = {}
+    for category, examples in candidate.items():
+        if not isinstance(examples, list):
+            continue
+        cat = str(category).strip() or "General"
+        filtered = []
+        for example in examples:
+            if not isinstance(example, str):
+                continue
+            text = example.strip()
+            if text:
+                filtered.append(text)
+        if filtered:
+            cleaned[cat] = filtered
+
+    if actor == "assistant":
+        merged = []
+        for examples in cleaned.values():
+            merged.extend(examples)
+        if not merged:
+            raise ValueError("No usable assistant anchors were returned by model.")
+        cleaned = {"Assistant responses": merged}
+
+    if not cleaned:
+        raise ValueError("No usable anchors were returned by model.")
+    return cleaned
+
+
+def parse_json_from_response(raw):
+    """Parse JSON even if the model wraps it with extra text/fences."""
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("Empty response content.")
+
+    if text.startswith("```"):
+        lines = text.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        text = "\n".join(lines).strip()
+
+    # First try direct parse.
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: attempt raw-decode from first JSON token onward.
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch not in "{[":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text[i:])
+            return obj
+        except json.JSONDecodeError:
+            continue
+
+    raise ValueError("Could not parse JSON from model response.")
 
 
 def generate_anchors(proposition, categories, num_examples, config):
@@ -146,39 +244,56 @@ def generate_anchors(proposition, categories, num_examples, config):
 
     model = config.get("openai", "model")
     client = OpenAI(api_key=api_key)
+    actor = infer_proposition_actor(proposition)
 
     print("  Calling {} to generate {} anchors...".format(model, num_examples))
-    print("  Categories: {}".format(", ".join(categories)))
+    print("  Proposition target: {}".format(actor))
+    if actor == "user":
+        print("  Categories: {}".format(", ".join(categories)))
+    else:
+        print("  Categories: disabled (assistant proposition)")
 
-    user_prompt = build_generation_prompt(proposition, categories, num_examples)
-
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=1.0,
-        max_completion_tokens=4096,
-    )
-
-    raw = response.choices[0].message.content.strip()
-
-    # Strip markdown fences if present
-    if raw.startswith("```"):
-        lines = raw.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        raw = "\n".join(lines)
+    user_prompt = build_generation_prompt(proposition, categories, num_examples, actor)
 
     try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=1.0,
+            max_completion_tokens=4096,
+            response_format={"type": "json_object"},
+        )
+    except Exception:
+        # Fallback for models/endpoints that do not accept response_format.
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=1.0,
+            max_completion_tokens=4096,
+        )
+
+    raw = (response.choices[0].message.content or "").strip()
+
+    try:
+        data = parse_json_from_response(raw)
+    except ValueError as e:
         print("\n  ERROR: Failed to parse JSON from OpenAI response.")
         print("  {}".format(e))
         print("  Raw:\n{}".format(raw[:500]))
         sys.exit(1)
 
-    return data.get("categories", data)
+    try:
+        return normalize_anchors_payload(data, actor)
+    except ValueError as e:
+        print("\n  ERROR: {}".format(e))
+        print("  Raw:\n{}".format(raw[:500]))
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
