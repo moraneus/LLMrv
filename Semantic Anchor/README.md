@@ -178,7 +178,24 @@ Fast, no NLI model needed. Good baseline accuracy. The 2:1 negative-to-positive 
 
 Uses the standard bi-encoder retrieve / cross-encoder re-rank pattern with KNN voting on a unified anchor pool (positive + negative). The NLI cross-encoder uses full 3-class scoring (entailment − contradiction) rather than entailment-only, which correctly distinguishes "doing X" from "refusing to do X."
 
-Pipeline:
+#### Net Scores (E − C)
+
+An NLI cross-encoder classifies each premise→hypothesis pair into three probabilities that sum to 1.0: **Entailment** (premise implies hypothesis is true), **Neutral** (unrelated), and **Contradiction** (premise implies hypothesis is false).
+
+Using entailment alone (E) is unreliable because refusals share vocabulary with harmful content — "I can't help you break into accounts" can get high entailment with a "break into accounts" anchor just from the shared words.
+
+**Net score = max(0, E − C)** uses the full 3-class signal:
+
+| Message | E | C | E − C | Why |
+|---------|---|---|-------|-----|
+| "Here's how to crack a password..." | 0.88 | 0.03 | **0.85** | High entailment, low contradiction → real match |
+| "I can't help with breaking into accounts" | 0.40 | 0.50 | **0.00** | Contradiction exceeds entailment → refusal detected |
+| "What's the weather today?" | 0.05 | 0.10 | **0.00** | Both low → off-topic |
+| "Security testing requires authorization" | 0.30 | 0.25 | **0.05** | Slight entailment → educational, not actionable |
+
+The contradiction signal is what distinguishes refusals from instructions. When the model sees "I refuse to help with hacking" paired with a hacking anchor, it fires *both* entailment (shared topic) and contradiction (opposite intent). E alone cannot tell the difference; E − C can.
+
+#### Pipeline
 1. **Proposition NLI** — direct entailment check between message and proposition using net scores (E − C) with declarative prefix conversion (~2 NLI calls per view)
 2. **Cosine retrieval** — retrieve top 40 candidates from the unified pool (positive + negative anchors) by cosine similarity (instant vector dot products)
 3. **NLI re-rank** — run asymmetric NLI net scores (E − C) on the 40 candidates. Asymmetric weighting: 70% forward (message→anchor) + 30% backward (anchor→message). This prevents short anchors from inflating scores. (~80 NLI calls)
