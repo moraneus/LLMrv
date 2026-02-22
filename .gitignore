@@ -210,3 +210,5 @@ __marimo__/
 # Semantic Anchor
 config.ini
 config*.ini
+
+log*
