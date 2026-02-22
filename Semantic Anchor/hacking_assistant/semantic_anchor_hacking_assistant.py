@@ -105,7 +105,7 @@ def _load_evaluator_config():
     nli_model = json_nli_model
     knn_size = 20  # default KNN neighborhood size
     hybrid_nli_w = 0.75  # default hybrid blend: 75% NLI + 25% cosine
-    nli_prop_suppress = None  # default: WARNING_THRESHOLD / 2
+    nli_abstain_margin = 0.15  # default: abstain when evidence margin < this
     emb_source = "anchors JSON"
     nli_source = "anchors JSON"
 
@@ -147,13 +147,9 @@ def _load_evaluator_config():
             val = cfg.get("thresholds", "hybrid_nli_weight", fallback=None)
             if val and val.strip():
                 hybrid_nli_w = float(val.strip())
-            val = cfg.get("thresholds", "nli_prop_suppress", fallback=None)
+            val = cfg.get("thresholds", "nli_abstain_margin", fallback=None)
             if val and val.strip():
-                nli_prop_suppress = float(val.strip())
-
-    # Default suppress threshold = half of warning threshold
-    if nli_prop_suppress is None:
-        nli_prop_suppress = warn_thresh / 2.0
+                nli_abstain_margin = float(val.strip())
 
     # Store sources for startup logging
     _model_sources["embedding"] = (emb_model, emb_source)
@@ -161,7 +157,7 @@ def _load_evaluator_config():
 
     return (proposition, anchors, match_thresh, warn_thresh,
             neg_anchors, neutral_anchors, emb_model, nli_model, role, knn_size,
-            hybrid_nli_w, nli_prop_suppress)
+            hybrid_nli_w, nli_abstain_margin)
 
 
 # Model source tracking — filled by _load_evaluator_config, read by main()
@@ -170,7 +166,7 @@ _model_sources = {}
 (PROPOSITION, ANCHORS, MATCH_THRESHOLD, WARNING_THRESHOLD,
  NEGATIVE_ANCHORS, NEUTRAL_ANCHORS,
  EMBEDDING_MODEL, NLI_MODEL, ANCHOR_ROLE, COSINE_KNN_K,
- HYBRID_NLI_WEIGHT, NLI_PROP_SUPPRESS) = _load_evaluator_config()
+ HYBRID_NLI_WEIGHT, NLI_ABSTAIN_MARGIN) = _load_evaluator_config()
 
 # Declarative prefix for NLI: converts questions/messages into statement form
 # Role-aware: "The user states: " for user messages, "The assistant states: " for assistant
@@ -766,7 +762,10 @@ def _nli_proposition_score(views, proposition):
 # NLI-only scoring (--nli mode) with proposition-guided extraction
 # ---------------------------------------------------------------------------
 
-NLI_ANCHOR_K = 10  # number of top cosine anchors to run NLI on (pos and neg each)
+NLI_RETRIEVE_K = 40   # cosine pre-filter: top 40 from unified pool (pos + neg)
+NLI_VOTE_K = 20       # re-rank by NLI, vote on top 20
+NLI_FWD_WEIGHT = 0.7  # asymmetric: 70% forward (message→anchor), 30% backward
+# NLI_ABSTAIN_MARGIN is loaded from config (default 0.15)
 COSINE_TOP_K_FRAC = 0.50  # fraction of anchors to average (top-50%)
 COSINE_TOP_K_MIN = 10     # minimum anchors to average
 
@@ -786,16 +785,20 @@ def _score_nli_core(message, all_texts, all_categories, model=None,
                     neutral_embeddings=None,
                     do_spellcheck=True, use_extraction=True):
     """
-    Core NLI scoring used by NLI and hybrid modes.
+    NLI KNN voting: retrieve candidates by cosine, re-rank by NLI, vote.
 
-    1. Proposition NLI with declarative prefix + net scores → prop_score
-    2. Cosine to find top-K closest positive anchors (instant)
-    3. Raw entailment NLI on top-K positive anchors → pos_anchor_nli
-    4. Cosine gap gates anchor NLI → anchor_score
-    5. Proposition gates final score:
-       - prop < 0.10 → trust proposition, suppress anchors (catches refusals)
-       - prop < warning → anchors contribute, damped by prop confidence
-       - prop >= warning → anchors confirm freely
+    Pipeline:
+      1. Spell check + extraction + build views
+      2. Proposition NLI (net scores, declarative prefix)
+      3. Cosine retrieval: top NLI_RETRIEVE_K from unified pool (pos + neg)
+      4. NLI re-rank: asymmetric net scores (E-C) on retrieved candidates
+         - 70% forward (message→anchor) + 30% backward (anchor→message)
+      5. Vote on top NLI_VOTE_K by NLI score:
+         - pos_evidence = sum of NLI scores for positive anchors
+         - neg_evidence = sum of NLI scores for negative anchors
+         - nli_knn_score = pos_evidence / (pos_evidence + neg_evidence + epsilon)
+      6. Final score = max(prop_score, nli_knn_score)
+      7. Abstain detection when evidence margin is small
 
     Returns (results, corrected, corrections, extraction, neg_cos, final_score, debug)
     """
@@ -831,109 +834,159 @@ def _score_nli_core(message, all_texts, all_categories, model=None,
     # Step 3: Proposition NLI (~2 calls per view)
     prop_score, prop_view = _nli_proposition_score(views, PROPOSITION)
 
-    # Step 4: Cosine pass — top-10 avg, find top-K pos AND neg anchors
+    # Step 4: Cosine retrieval from UNIFIED pool (pos + neg)
+    # Build unified pool: (index, is_positive, text, category, cosine_score)
     neg_cos = 0.0
     pos_cos = 0.0
-    cosine_scores = [0.0] * len(all_texts)
-    neg_cosine_scores = []
     best_view_text = views[0][0]
+    unified_pool = []
+
+    n_pos = len(all_texts)
+    n_neg = len(neg_texts) if neg_texts else 0
 
     if model is not None and all_embeddings is not None:
         from sentence_transformers.util import cos_sim
-        if neg_texts and neg_embeddings is not None:
-            neg_cosine_scores = [0.0] * len(neg_texts)
+
+        pos_cosines = [0.0] * n_pos
+        neg_cosines = [0.0] * n_neg
 
         for view_text, _ in views:
             emb = model.encode(view_text)
+
+            # Positive cosines
             p_sims = cos_sim(emb, all_embeddings)[0].tolist()
             view_pos_cos = _top_k_cosine_avg(p_sims)
             if view_pos_cos > pos_cos:
                 pos_cos = view_pos_cos
                 best_view_text = view_text
             for i, s in enumerate(p_sims):
-                if s > cosine_scores[i]:
-                    cosine_scores[i] = s
-            if neg_embeddings is not None:
+                if s > pos_cosines[i]:
+                    pos_cosines[i] = s
+
+            # Negative cosines
+            if neg_embeddings is not None and neg_texts:
                 n_sims = cos_sim(emb, neg_embeddings)[0].tolist()
                 view_neg_cos = _top_k_cosine_avg(n_sims)
                 if view_neg_cos > neg_cos:
                     neg_cos = view_neg_cos
                 for i, s in enumerate(n_sims):
-                    if s > neg_cosine_scores[i]:
-                        neg_cosine_scores[i] = s
+                    if s > neg_cosines[i]:
+                        neg_cosines[i] = s
+
+        # Build unified pool
+        for i in range(n_pos):
+            unified_pool.append({
+                "idx": i, "is_positive": True,
+                "text": all_texts[i], "category": all_categories[i],
+                "cosine": pos_cosines[i],
+            })
+        for i in range(n_neg):
+            unified_pool.append({
+                "idx": n_pos + i, "is_positive": False,
+                "text": neg_texts[i], "category": "NEGATIVE",
+                "cosine": neg_cosines[i],
+            })
 
     gap = pos_cos - neg_cos
 
-    # Anchors use RAW entailment (not net scores) — positive anchors only.
-    # Cosine gap gates the anchor score: positive gap = trust NLI, negative gap = penalize.
-    # This works because cosine gap differentiates harmful vs benign (gap=+0.08 vs -0.05)
-    # while NLI contrastive doesn't (both pos and neg anchors get ~0.99 NLI).
-    # No negative anchor NLI needed — saves ~20 NLI calls.
+    # Sort by cosine, take top NLI_RETRIEVE_K for NLI re-ranking
+    unified_pool.sort(key=lambda x: x["cosine"], reverse=True)
+    retrieve_k = min(NLI_RETRIEVE_K, len(unified_pool))
+    candidates = unified_pool[:retrieve_k]
 
-    # Step 5: NLI on top-K POSITIVE anchors (~20 NLI calls)
-    top_pos_indices = sorted(range(len(all_texts)),
-                             key=lambda i: cosine_scores[i], reverse=True)[:NLI_ANCHOR_K]
-    top_pos_texts = [all_texts[i] for i in top_pos_indices]
+    # Step 5: NLI on retrieved candidates — asymmetric net scores (E - C)
+    # Forward: message→anchor (does message entail anchor?)
+    # Backward: anchor→message (does anchor entail message?)
+    # Combined: 0.7 × forward + 0.3 × backward
+    if candidates:
+        cand_texts = [c["text"] for c in candidates]
+        pairs_fwd = [[best_view_text, t] for t in cand_texts]
+        pairs_bwd = [[t, best_view_text] for t in cand_texts]
+        net_fwd = _nli_net_scores(pairs_fwd)
+        net_bwd = _nli_net_scores(pairs_bwd)
 
-    pos_anchor_nli_scores = {}
-    pairs_fwd = [[best_view_text, t] for t in top_pos_texts]
-    pairs_bwd = [[t, best_view_text] for t in top_pos_texts]
-    ent_fwd = _nli_entailment_scores(pairs_fwd)
-    ent_bwd = _nli_entailment_scores(pairs_bwd)
+        bwd_weight = 1.0 - NLI_FWD_WEIGHT
+        for i, cand in enumerate(candidates):
+            cand["nli_score"] = NLI_FWD_WEIGHT * net_fwd[i] + bwd_weight * net_bwd[i]
+            cand["nli_fwd"] = net_fwd[i]
+            cand["nli_bwd"] = net_bwd[i]
 
-    for j, idx in enumerate(top_pos_indices):
-        pos_anchor_nli_scores[idx] = max(ent_fwd[j], ent_bwd[j])
+    # Step 6: Re-rank by NLI score, vote on top NLI_VOTE_K
+    candidates.sort(key=lambda x: x.get("nli_score", 0), reverse=True)
+    vote_k = min(NLI_VOTE_K, len(candidates))
+    voters = candidates[:vote_k]
 
-    max_pos_anchor_nli = max(pos_anchor_nli_scores.values()) if pos_anchor_nli_scores else 0.0
+    pos_evidence = 0.0
+    neg_evidence = 0.0
+    pos_in_k = 0
+    neg_in_k = 0
+    voter_details = []
 
-    # Step 6: Gap-gated anchor score
-    # gap <= 0 means equally close to benign → anchor NLI unreliable → suppress
-    # gap > 0 means closer to harmful → scale linearly up to full at gap=0.05
-    NLI_ANCHOR_GAP_RAMP = 0.05  # gap at which anchor NLI reaches full strength
-    if gap <= 0:
-        anchor_score = 0.0
+    for v in voters:
+        nli_s = v.get("nli_score", 0)
+        if v["is_positive"]:
+            pos_evidence += nli_s
+            pos_in_k += 1
+        else:
+            neg_evidence += nli_s
+            neg_in_k += 1
+        voter_details.append({
+            "text": v["text"][:60], "category": v["category"],
+            "is_positive": v["is_positive"], "nli_score": nli_s,
+            "cosine": v["cosine"],
+        })
+
+    total_evidence = pos_evidence + neg_evidence + 1e-10
+    nli_knn_score = pos_evidence / total_evidence
+
+    # Step 7: Evidence margin for abstain detection
+    evidence_margin = abs(pos_evidence - neg_evidence) / total_evidence
+    abstain = evidence_margin < NLI_ABSTAIN_MARGIN
+
+    # Step 8: Final score = max(prop_score, nli_knn_score)
+    # No gating needed — NLI KNN handles refusals via negative anchor voting
+    final_score = max(prop_score, nli_knn_score)
+
+    if abstain:
+        action = "abstain(margin={:.2f})".format(evidence_margin)
+    elif final_score >= MATCH_THRESHOLD:
+        action = "match"
+    elif final_score >= WARNING_THRESHOLD:
+        action = "warning"
     else:
-        scale = min(1.0, gap / NLI_ANCHOR_GAP_RAMP)
-        anchor_score = max_pos_anchor_nli * scale
-
-    # Step 7: Proposition-gated final score
-    #
-    # The proposition NLI is the strongest semantic signal — it directly checks
-    # whether the message entails the harmful intent. Anchors are a blunt
-    # topical-similarity tool that can't distinguish "doing X" from "refusing X."
-    #
-    # Gating logic:
-    #   prop < suppress → proposition confident it's NOT a match → trust it,
-    #                     suppress anchor score (prevents refusals from matching)
-    #   prop < warning  → ambiguous → anchors contribute, damped by prop confidence
-    #   prop >= warning → proposition already flagging → anchors confirm freely
-    if prop_score < NLI_PROP_SUPPRESS:
-        final_score = prop_score
-        gate_action = "prop_suppressed"
-    elif prop_score < WARNING_THRESHOLD:
-        gate = prop_score / WARNING_THRESHOLD
-        final_score = max(prop_score, anchor_score * gate)
-        gate_action = "prop_gated({:.2f})".format(gate)
-    else:
-        final_score = max(prop_score, anchor_score)
-        gate_action = "prop_confirmed"
+        action = "no_match"
 
     debug = {
         "method": "nli",
         "prop_score": prop_score,
-        "pos_anchor_nli": max_pos_anchor_nli,
-        "anchor_score": anchor_score,
+        "nli_knn_score": nli_knn_score,
+        "pos_evidence": pos_evidence,
+        "neg_evidence": neg_evidence,
+        "evidence_margin": evidence_margin,
+        "pos_in_k": pos_in_k,
+        "neg_in_k": neg_in_k,
+        "vote_k": vote_k,
+        "retrieve_k": retrieve_k,
         "combined": final_score,
         "gap": gap,
         "pos_cos": pos_cos,
         "neg_cos": neg_cos,
-        "action": gate_action,
+        "abstain": abstain,
+        "action": action,
+        "voters": voter_details[:5],  # top 5 for display
     }
 
-    # Build results — sorted by pos anchor NLI (top-K) then cosine (rest)
-    anchor_order = sorted(range(len(all_texts)),
-                          key=lambda i: pos_anchor_nli_scores.get(i, cosine_scores[i]),
-                          reverse=True)
+    # Build results — sorted by NLI score (candidates first, then rest by cosine)
+    # Each result carries the overall final_score for verdict purposes
+    anchor_order = []
+    seen = set()
+    for c in candidates:
+        if c["is_positive"]:
+            anchor_order.append(c["idx"])
+            seen.add(c["idx"])
+    for i in range(n_pos):
+        if i not in seen:
+            anchor_order.append(i)
     results = [(final_score, all_texts[i], all_categories[i], "") for i in anchor_order]
 
     return results, corrected, corrections, extraction, neg_cos, final_score, debug
@@ -944,11 +997,11 @@ def score_message_nli(message, all_texts, all_categories, model=None,
                       neutral_embeddings=None,
                       do_spellcheck=True, use_extraction=True):
     """
-    NLI scoring: proposition-gated anchor entailment.
+    NLI KNN voting: retrieve by cosine, re-rank by NLI, vote.
 
-    Uses proposition NLI as the primary signal. Anchor NLI contributes only
-    when the proposition is ambiguous (score in warning zone). When the
-    proposition is confident the message is NOT a match, anchors are suppressed.
+    Combines proposition NLI with anchor NLI KNN voting. Negative anchors
+    compete directly with positive anchors, naturally handling refusals
+    without gating or suppression.
 
     Returns (results, corrected, corrections, extraction_info, neg_cos, final_score)
     """
@@ -1019,14 +1072,18 @@ def score_message_hybrid(message, all_texts, all_categories, model=None,
         "cos_weight": cos_weight,
         "combined": hybrid_score,
         "prop_score": nli_debug.get("prop_score", 0),
-        "pos_anchor_nli": nli_debug.get("pos_anchor_nli", 0),
-        "anchor_score": nli_debug.get("anchor_score", 0),
-        "gap": nli_debug.get("gap", 0),
-        "pos_cos": nli_debug.get("pos_cos", 0),
-        "neg_cos": nli_debug.get("neg_cos", 0),
+        "nli_knn_score": nli_debug.get("nli_knn_score", 0),
+        "pos_evidence": nli_debug.get("pos_evidence", 0),
+        "neg_evidence": nli_debug.get("neg_evidence", 0),
+        "evidence_margin": nli_debug.get("evidence_margin", 0),
+        "nli_pos_in_k": nli_debug.get("pos_in_k", 0),
+        "nli_neg_in_k": nli_debug.get("neg_in_k", 0),
+        "nli_vote_k": nli_debug.get("vote_k", 0),
         "nli_action": nli_debug.get("action", ""),
-        "pos_in_k": knn_info.get("pos_in_k", 0),
-        "k": knn_info.get("k", 0),
+        "abstain": nli_debug.get("abstain", False),
+        "gap": nli_debug.get("gap", 0),
+        "cos_pos_in_k": knn_info.get("pos_in_k", 0),
+        "cos_k": knn_info.get("k", 0),
     }
     return results, corrected, corrections, extraction, neg_cos, debug
 
@@ -1329,7 +1386,8 @@ def print_banner():
         MATCH_THRESHOLD, WARNING_THRESHOLD, COSINE_KNN_K))
     print("  Hybrid blend: {:.0f}% NLI + {:.0f}% cosine KNN".format(
         HYBRID_NLI_WEIGHT * 100, (1 - HYBRID_NLI_WEIGHT) * 100))
-    print("  NLI prop suppress: {} (anchors suppressed below this)".format(NLI_PROP_SUPPRESS))
+    print("  NLI KNN: retrieve={}, vote={}, fwd_weight={}, abstain_margin={}".format(
+        NLI_RETRIEVE_K, NLI_VOTE_K, NLI_FWD_WEIGHT, NLI_ABSTAIN_MARGIN))
     print("")
 
 
@@ -1515,11 +1573,14 @@ def display_default_hybrid(results, corrected, corrections, extraction=None,
         nli_w = debug.get("nli_weight", 0.75)
         cos_w = debug.get("cos_weight", 0.25)
         combined = debug.get("combined", 0)
-        pos_in_k = debug.get("pos_in_k", 0)
-        k = debug.get("k", 0)
+        cos_pos = debug.get("cos_pos_in_k", 0)
+        cos_k = debug.get("cos_k", 0)
+        nli_pos = debug.get("nli_pos_in_k", 0)
+        nli_neg = debug.get("nli_neg_in_k", 0)
         nli_action = debug.get("nli_action", "")
-        print("  {}Hybrid: nli={:.3f} x {:.0f}% + knn={:.3f} ({}/{}) x {:.0f}% = {:.3f} [{}]{}".format(
-            DIM, nli_sc, nli_w * 100, knn_sc, pos_in_k, k, cos_w * 100, combined,
+        print("  {}Hybrid: nli={:.3f} ({}+/{}−) x {:.0f}% + cos_knn={:.3f} ({}/{}) x {:.0f}% = {:.3f} [{}]{}".format(
+            DIM, nli_sc, nli_pos, nli_neg, nli_w * 100,
+            knn_sc, cos_pos, cos_k, cos_w * 100, combined,
             nli_action, RESET))
 
     print("\n  {}\n".format(format_verdict(top_score, neg_score)))
@@ -1553,15 +1614,19 @@ def display_verbose_hybrid(results, corrected, corrections, extraction=None,
         nli_w = debug.get("nli_weight", 0.75)
         cos_w = debug.get("cos_weight", 0.25)
         combined = debug.get("combined", 0)
-        pos_in_k = debug.get("pos_in_k", 0)
-        k = debug.get("k", 0)
-        gap = debug.get("gap", 0)
+        cos_pos = debug.get("cos_pos_in_k", 0)
+        cos_k = debug.get("cos_k", 0)
         prop = debug.get("prop_score", 0)
+        nli_pos = debug.get("nli_pos_in_k", 0)
+        nli_neg = debug.get("nli_neg_in_k", 0)
+        pos_ev = debug.get("pos_evidence", 0)
+        neg_ev = debug.get("neg_evidence", 0)
+        margin = debug.get("evidence_margin", 0)
         nli_action = debug.get("nli_action", "")
-        print("  {}Hybrid debug: nli={:.3f} (prop={:.3f} gap={:.3f}) x {:.0f}% + "
-              "knn={:.3f} ({}/{}) x {:.0f}% = {:.3f} [{}]{}".format(
-            DIM, nli_sc, prop, gap, nli_w * 100,
-            knn_sc, pos_in_k, k, cos_w * 100, combined, nli_action, RESET))
+        print("  {}Hybrid debug: nli={:.3f} (prop={:.3f} knn={}+/{}− ev={:.2f}/{:.2f} margin={:.2f}) x {:.0f}%".format(
+            DIM, nli_sc, prop, nli_pos, nli_neg, pos_ev, neg_ev, margin, nli_w * 100))
+        print("               + cos_knn={:.3f} ({}/{}) x {:.0f}% = {:.3f} [{}]{}".format(
+            knn_sc, cos_pos, cos_k, cos_w * 100, combined, nli_action, RESET))
 
     print("\n  {}\n".format(format_verdict(top_score, neg_score)))
     print("  {:<5} {:>8}  {:<30} {}".format("#", "NLI", "Category", "Anchor Text"))
@@ -1936,11 +2001,14 @@ def display_compare(message, mode_results, index=None, total=None):
         nli_w = debug.get("nli_weight", 0.75)
         cos_w = debug.get("cos_weight", 0.25)
         combined = debug.get("combined", 0)
-        pos_in_k = debug.get("pos_in_k", 0)
-        k = debug.get("k", 0)
+        cos_pos = debug.get("cos_pos_in_k", 0)
+        cos_k = debug.get("cos_k", 0)
+        nli_pos = debug.get("nli_pos_in_k", 0)
+        nli_neg = debug.get("nli_neg_in_k", 0)
         nli_action = debug.get("nli_action", "")
-        print("  {}Hybrid: nli={:.3f} x {:.0f}% + knn={:.3f} ({}/{}) x {:.0f}% = {:.3f} [{}]{}".format(
-            DIM, nli_sc, nli_w * 100, knn_sc, pos_in_k, k, cos_w * 100, combined,
+        print("  {}Hybrid: nli={:.3f} ({}+/{}−) x {:.0f}% + cos_knn={:.3f} ({}/{}) x {:.0f}% = {:.3f} [{}]{}".format(
+            DIM, nli_sc, nli_pos, nli_neg, nli_w * 100,
+            knn_sc, cos_pos, cos_k, cos_w * 100, combined,
             nli_action, RESET))
 
     print()

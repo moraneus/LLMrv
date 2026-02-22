@@ -158,7 +158,7 @@ match_threshold = 0.85
 warning_threshold = 0.70
 knn_size = 20
 hybrid_nli_weight = 0.75
-nli_prop_suppress = 0.35
+nli_abstain_margin = 0.15
 ```
 
 ## Scoring Modes
@@ -174,31 +174,34 @@ Merges all positive and negative anchors into a unified pool, finds the K neares
 
 Fast, no NLI model needed. Good baseline accuracy. The 2:1 negative-to-positive ratio (configurable via `negative_ratio` in generator config) ensures broad coverage of the benign space.
 
-### NLI Entailment (`--mode nli`)
+### NLI KNN Voting (`--mode nli`)
 
-Uses a cross-encoder NLI model (DeBERTa) for entailment scoring, combined with cosine similarity for gating.
+Uses the standard bi-encoder retrieve / cross-encoder re-rank pattern with KNN voting on a unified anchor pool (positive + negative). The NLI cross-encoder uses full 3-class scoring (entailment − contradiction) rather than entailment-only, which correctly distinguishes "doing X" from "refusing to do X."
 
 Pipeline:
-1. **Proposition NLI** — direct entailment check between the message and the proposition (~2 NLI calls per view)
-2. **Cosine on ALL anchors** — computes similarity to all positive and negative anchors (fast vector dot products, no NLI) to produce a cosine gap (pos_cos − neg_cos)
-3. **NLI on top-K positive anchors only** — raw entailment on the ~10 closest positive anchors (~20 NLI calls). Negative anchors are skipped because NLI gives ~0.99 to both sides (shared vocabulary), so it adds no signal.
-4. **Gap gates anchor NLI** — the cosine gap decides how much to trust the anchor NLI score. Positive gap (closer to harmful) → trust it. Negative gap (closer to benign) → suppress to zero.
-5. **Proposition gates final score** — the proposition NLI is the strongest semantic signal and gates how much anchors can contribute:
-   - prop < `nli_prop_suppress` (default 0.35): proposition confident it's NOT a match → suppress anchors entirely (catches refusals and off-topic)
-   - prop < `warning_threshold`: ambiguous → anchors contribute, damped by proposition confidence
-   - prop >= `warning_threshold`: proposition already flagging → anchors confirm freely
+1. **Proposition NLI** — direct entailment check between message and proposition using net scores (E − C) with declarative prefix conversion (~2 NLI calls per view)
+2. **Cosine retrieval** — retrieve top 40 candidates from the unified pool (positive + negative anchors) by cosine similarity (instant vector dot products)
+3. **NLI re-rank** — run asymmetric NLI net scores (E − C) on the 40 candidates. Asymmetric weighting: 70% forward (message→anchor) + 30% backward (anchor→message). This prevents short anchors from inflating scores. (~80 NLI calls)
+4. **KNN vote** — sort by NLI score, take top 20. Compute evidence:
+   - Positive evidence = sum of NLI scores for positive anchors in top-20
+   - Negative evidence = sum of NLI scores for negative anchors in top-20
+   - Score = positive evidence / (positive + negative evidence)
+5. **Final score** = max(proposition score, NLI KNN score)
+6. **Abstain detection** — when evidence margin is below `nli_abstain_margin` (default 0.15), the result is flagged as ambiguous. Consider routing abstains to LLM judge.
+
+Why NLI KNN works: negative anchors (refusals, security education, career advice) compete directly with positive anchors. A refusal about hacking has high NLI scores with both positive and negative anchors, but the negatives (which describe refusals and defensive content) score higher, pushing the ratio down. No gating or suppression logic needed — the voting handles it naturally.
 
 ### Hybrid (`--mode hybrid`)
 
-Weighted blend of NLI entailment and Cosine KNN voting:
+Weighted blend of NLI KNN voting and Cosine KNN voting:
 
 ```
-hybrid_score = nli_weight × nli_score + (1 - nli_weight) × knn_score
+hybrid_score = nli_weight × nli_knn_score + (1 - nli_weight) × cosine_knn_score
 ```
 
 Default: **75% NLI + 25% cosine KNN**. Configurable via `hybrid_nli_weight` in `config_NAME.ini`.
 
-This gives you NLI's semantic understanding (catches paraphrases, indirect phrasing) combined with KNN's neighborhood-based robustness (catches vocabulary overlap, surface-level patterns). Recommended for production use.
+Combines NLI's semantic understanding (catches paraphrases, indirect phrasing, distinguishes intent from topic) with cosine KNN's neighborhood-based robustness (fast, catches surface-level patterns). Recommended for production use.
 
 ### LLM-as-Judge (`--mode llm`)
 
@@ -245,8 +248,8 @@ semantic_anchor_generator.py
 semantic_anchor_NAME.py + anchors_list_NAME.json + config_NAME.ini
        |
        |-- cosine mode:  KNN voting (sentence-transformers only)
-       |-- nli mode:     Cross-encoder entailment (+ sentence-transformers)
-       |-- hybrid mode:  Cosine fast-path + NLI (recommended)
+       |-- nli mode:     NLI KNN voting (bi-encoder retrieve + cross-encoder re-rank)
+       |-- hybrid mode:  75% NLI KNN + 25% cosine KNN (recommended)
        +-- llm mode:     LLM API call (requires API key)
 ```
 
