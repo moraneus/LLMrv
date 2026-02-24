@@ -1970,9 +1970,9 @@ def generate_negative_anchors(proposition, positive_anchors_dict, target_n, conf
         " (capped from {}x{} positive)".format(
             2, num_rounds) if num_rounds and num_rounds * 2 > neg_rounds else ""))
 
-    neg_seed_count = max(25, min(50, target_n // 10))
+    neg_seed_count = max(40, min(80, target_n // 5))
     if role == "assistant":
-        neg_seed_count = max(neg_seed_count, 30)
+        neg_seed_count = max(neg_seed_count, 50)
     print("\n    {}Seed:{} Generating {} core negative anchors (boundary-aware)...".format(
         BOLD, RESET, neg_seed_count))
 
@@ -2008,6 +2008,21 @@ def generate_negative_anchors(proposition, positive_anchors_dict, target_n, conf
         '   "[Do harmful thing]" → "How do authorities catch [harmful thing]?"\n\n'
         'E) LEGITIMATE ACTION mirrors — same verbs, legal context:\n'
         '   "[Action] for harmful purpose" → "[Action] for legitimate purpose"\n\n'
+        'F) ENTERTAINMENT / RECOMMENDATION mirrors — same nouns, consumer context:\n'
+        '   "[Build harmful thing]" → "Recommend a movie about [thing]"\n'
+        '   "[Do harmful action]" → "Best documentary about [topic]?"\n\n'
+        'G) SAFETY / STORAGE / HANDLING mirrors — same objects, safe-use context:\n'
+        '   "[Make dangerous item]" → "How to safely store [item]?"\n'
+        '   "[Build dangerous thing]" → "How to dispose of [thing] safely?"\n\n'
+        'H) LEGAL / REGULATORY mirrors — same domain, compliance context:\n'
+        '   "[Do illegal action]" → "What are the laws about [action]?"\n'
+        '   "[Build restricted item]" → "What permits do I need for [item]?"\n\n'
+        'I) HISTORICAL / HOBBY mirrors — same objects, collecting/reenactment:\n'
+        '   "[Build weapon]" → "History of [weapon]"\n'
+        '   "[Make device]" → "[Device] in museum collections"\n\n'
+        'J) COMPARISON / REVIEW mirrors — same products, evaluation context:\n'
+        '   "[Modify thing for harm]" → "What safety features does [thing] have?"\n'
+        '   "[Build dangerous item]" → "Compare [item] brands for safety"\n\n'
         'RULES:\n'
         '- Every negative MUST use keywords that appear in the positive anchors above\n'
         '- Every negative MUST be obviously benign to any reasonable person\n'
@@ -2776,6 +2791,96 @@ def generate_hard_negatives(proposition, positive_anchors_dict, negative_anchors
         "Output ONLY valid JSON."
     ).format(rc["example_noun_short"])
 
+    # --- Round 0: Generate proposition-specific false positive categories ---
+    print("    Generating domain-specific false-positive categories...")
+
+    fp_cat_prompt = (
+        rc["safety_context"] +
+        'PROPOSITION (harmful intent to detect): "{}"\n\n'
+        'POSITIVE ANCHORS (harmful — classifier correctly flags these):\n'
+        '{}\n\n'
+        'A safety classifier flags {} matching the proposition above.\n'
+        'Your task: identify the 8-10 most likely FALSE POSITIVE scenarios —\n'
+        'benign {} that share vocabulary with the proposition but have\n'
+        'legitimate, innocent intent.\n\n'
+        'Think about WHO would use similar words with DIFFERENT intent:\n'
+        '- Students, researchers, educators, journalists\n'
+        '- Professionals (safety officers, compliance, law enforcement)\n'
+        '- Hobbyists, historians, collectors\n'
+        '- Consumers asking about products, regulations, recommendations\n'
+        '- Victims, reporters, concerned citizens\n'
+        '- Entertainment seekers (movies, games, books)\n\n'
+        'For EACH category, give:\n'
+        '- A descriptive name\n'
+        '- 2-3 example {} that a classifier would wrongly flag\n\n'
+        'The examples must use the SAME KEYWORDS as the positives but be\n'
+        'obviously benign. They should cover different verbs/intents:\n'
+        'storing, buying, identifying, reporting, recommending, reviewing,\n'
+        'regulating, disposing, studying, comparing, etc.\n\n'
+        'Output ONLY valid JSON:\n'
+        '{{"categories": [\n'
+        '  {{"name": "Category name", "examples": ["ex1", "ex2"]}},\n'
+        '  ...\n'
+        ']}}'
+    ).format(proposition, pos_sample_text, rc["example_noun_short"],
+             rc["example_noun_short"], rc["example_noun_short"])
+
+    fp_cat_result = call_llm(config, hard_neg_system, fp_cat_prompt)
+
+    fp_categories = []
+    try:
+        if isinstance(fp_cat_result, dict):
+            parsed_fp = fp_cat_result
+        else:
+            parsed_fp = json.loads(str(fp_cat_result).strip())
+        if "categories" in parsed_fp and isinstance(parsed_fp["categories"], list):
+            for cat_obj in parsed_fp["categories"]:
+                if isinstance(cat_obj, dict) and "name" in cat_obj:
+                    fp_categories.append(cat_obj)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+
+    # Build category text for the main prompt
+    if len(fp_categories) >= 4:
+        cat_letters = "ABCDEFGHIJKLMNO"
+        fp_cat_block = ""
+        for i, cat_obj in enumerate(fp_categories[:10]):
+            name = cat_obj.get("name", "Category {}".format(i + 1))
+            examples = cat_obj.get("examples", [])
+            fp_cat_block += '{}) {}:\n'.format(cat_letters[i], name)
+            for ex in examples[:3]:
+                fp_cat_block += '   - "{}"\n'.format(str(ex).strip())
+            fp_cat_block += '\n'
+        print("    Generated {} false-positive categories from LLM".format(
+            len(fp_categories)))
+        for cat_obj in fp_categories[:10]:
+            print("      - {}".format(cat_obj.get("name", "?")))
+    else:
+        # Fallback: generic categories (no hardcoded domain examples)
+        print("    Using generic false-positive categories (LLM returned too few)")
+        fp_cat_block = (
+            'A) DEFINITIONAL / "What is X?" questions:\n'
+            '   Questions about CONCEPTS, not how to DO them.\n\n'
+            'B) EDUCATIONAL / RESEARCH queries:\n'
+            '   Academic papers, coursework, professional training.\n\n'
+            'C) SAFETY / DEFENSIVE queries:\n'
+            '   Detection, prevention, protection, disposal.\n\n'
+            'D) PROFESSIONAL / COMPLIANCE contexts:\n'
+            '   Law enforcement, regulation, auditing, inspection.\n\n'
+            'E) ENTERTAINMENT / MEDIA recommendations:\n'
+            '   Movies, games, books, documentaries about the topic.\n\n'
+            'F) STORAGE / HANDLING / MAINTENANCE:\n'
+            '   Safe storage, disposal, transport, care.\n\n'
+            'G) LEGAL / REGULATORY questions:\n'
+            '   Laws, permits, licensing, compliance.\n\n'
+            'H) HISTORICAL / HOBBY / COLLECTING:\n'
+            '   Reenactments, museums, vintage items, collecting.\n\n'
+            'I) VICTIM / REPORTING / CONCERNED CITIZEN:\n'
+            '   Reporting threats, seeking help, suspicious items.\n\n'
+            'J) NEWS / CURRENT EVENTS:\n'
+            '   Journalism, statistics, trends, policy debates.\n\n'
+        )
+
     # --- Round 1: Main generation ---
     round1_n = int(target_n * 2.0)  # over-generate for MMR selection
 
@@ -2791,42 +2896,21 @@ def generate_hard_negatives(proposition, positive_anchors_dict, negative_anchors
         '2. But use the EXACT SAME vocabulary and topic keywords as the positive anchors\n'
         '3. Would fool a surface-level classifier into thinking they are harmful\n'
         '4. A human would immediately recognize as innocent\n\n'
-        'CATEGORIES of hard negatives to generate:\n\n'
-        'A) DEFINITIONAL / "What is X?" questions:\n'
-        '   - "What is a chargeback?"\n'
-        '   - "What does money laundering mean?"\n'
-        '   - "Define tax evasion"\n'
-        '   These ask about CONCEPTS, not how to DO them.\n\n'
-        'B) EDUCATIONAL / RESEARCH queries:\n'
-        '   - "Explain how fraud schemes work for my criminology class"\n'
-        '   - "I\'m writing a paper on financial crime detection"\n'
-        '   - "What are common money laundering techniques? (for compliance training)"\n\n'
-        'C) DEFENSIVE / PROTECTIVE queries:\n'
-        '   - "How do I detect chargeback fraud on my business?"\n'
-        '   - "What signs indicate someone is laundering money through my company?"\n'
-        '   - "How can I protect myself from tax fraud?"\n\n'
-        'D) PROFESSIONAL / COMPLIANCE contexts:\n'
-        '   - "As a bank compliance officer, I need to understand structuring"\n'
-        '   - "What should auditors look for in fraudulent income documents?"\n'
-        '   - "Training material for anti-money laundering certification"\n\n'
-        'E) NEWS / CURRENT EVENTS / HISTORICAL:\n'
-        '   - "Why is credit card fraud increasing this year?"\n'
-        '   - "What was the biggest money laundering case in history?"\n'
-        '   - "How did regulators catch the tax evasion scheme?"\n\n'
-        'F) VICTIM / REPORTING contexts:\n'
-        '   - "I think someone committed chargeback fraud against my store"\n'
-        '   - "How do I report suspected tax evasion?"\n'
-        '   - "My identity was stolen and used for fraud"\n\n'
-        'CRITICAL: Every example must be GENUINELY BENIGN. Zero harmful intent.\n'
-        'They just happen to use vocabulary that overlaps with harmful requests.\n\n'
+        'CATEGORIES of false-positive scenarios to cover:\n\n'
+        '{}'
+        'CRITICAL RULES:\n'
+        '- Every example must be GENUINELY BENIGN. Zero harmful intent.\n'
+        '- They just happen to use vocabulary that overlaps with harmful requests.\n'
+        '- DISTRIBUTE EVENLY across ALL categories above.\n'
+        '- Each category must get at least 3 examples.\n\n'
         'LENGTH RULES:\n'
-        '- At least 30% should be VERY SHORT (3-8 words) — "What is a chargeback?"\n'
-        '- At least 30% should be SHORT (9-15 words) — with minimal context\n'
-        '- The rest can be MEDIUM (16+ words) — with professional/educational framing\n\n'
+        '- At least 30% should be VERY SHORT (3-8 words)\n'
+        '- At least 30% should be SHORT (9-15 words)\n'
+        '- The rest can be MEDIUM (16+ words) with context\n\n'
         'Output ONLY valid JSON:\n'
         '{{"hard_negatives": ["example1", "example2", ...]}}'
     ).format(proposition, pos_sample_text, neg_sample_text,
-             round1_n, rc["example_noun_short"])
+             round1_n, rc["example_noun_short"], fp_cat_block)
 
     result = call_llm(config, hard_neg_system, hard_neg_prompt)
 
@@ -2888,18 +2972,19 @@ def generate_hard_negatives(proposition, positive_anchors_dict, negative_anchors
                 '{}\n\n'
                 'POSITIVE (harmful) EXAMPLES for reference (a classifier flags these):\n'
                 '{}\n\n'
+                'FALSE-POSITIVE CATEGORIES to cover:\n'
+                '{}\n\n'
                 'Generate {} MORE hard negative {} using DIFFERENT angles, vocabulary, '
                 'and scenarios from the examples above. Each must be COMPLETELY BENIGN '
                 'but use vocabulary that overlaps with the harmful positive anchors.\n\n'
                 'Focus on:\n'
-                '- Categories NOT well covered: definitional, educational, defensive,\n'
-                '  professional, news/historical, victim/reporting\n'
+                '- Categories NOT yet well covered from the list above\n'
                 '- Different lengths (mix very short, short, medium)\n'
                 '- Different registers (student, professional, casual, victim)\n\n'
                 'Output ONLY valid JSON:\n'
                 '{{"hard_negatives": ["example1", "example2", ...]}}'
             ).format(proposition, best_hard_neg_text, pos_sample_text,
-                     round2_n, rc["example_noun_short"])
+                     fp_cat_block, round2_n, rc["example_noun_short"])
 
             result2 = call_llm(config, hard_neg_system, round2_prompt)
 
@@ -3092,7 +3177,7 @@ Usage:
 Scoring modes:
   cosine:  KNN voting over unified positive/negative anchor pool. Fast, no NLI needed.
   nli:     NLI entailment scoring with gap-gated anchor analysis. Handles paraphrases well.
-  hybrid:  Merged cosine + NLI KNN (union of both top-K, count positives). Recommended.
+  hybrid:  Cosine + NLI KNN (20+20=40 voters, count positives). Recommended.
   llm:     LLM-as-judge. Requires config_%%NAME%%.ini with provider, model, api_key.
   compare: Runs all modes side-by-side with verdict, score, and top anchors.
 
@@ -3925,7 +4010,7 @@ def score_message_nli(message, all_texts, all_categories, model=None,
 
 
 # ---------------------------------------------------------------------------
-# Hybrid scoring (merged cosine + NLI KNN)
+# Hybrid scoring (cosine + NLI KNN (20+20 voters))
 # ---------------------------------------------------------------------------
 
 def score_message_hybrid(message, all_texts, all_categories, model=None,
@@ -3933,14 +4018,10 @@ def score_message_hybrid(message, all_texts, all_categories, model=None,
                          neutral_embeddings=None,
                          do_spellcheck=True, use_extraction=True):
     """
-    Hybrid scoring: merge cosine KNN and NLI KNN voters, count positives.
+    Hybrid scoring: stack cosine KNN and NLI KNN voters, count positives.
 
-    Takes 20 nearest neighbors from cosine KNN + 20 from NLI KNN,
-    deduplicates into a union set (up to 40 unique voters), and counts
-    how many are positive. score = pos / total_unique_voters.
-
-    This combines cosine's spatial signal with NLI's semantic re-ranking
-    while keeping the scoring simple and predictable.
+    Takes 20 from cosine KNN + 20 from NLI KNN = 40 total voters.
+    score = (cos_positives + nli_positives) / 40.
 
     Returns (results, corrected, corrections, extraction_info, neg_cos, debug_info)
     """
@@ -3963,40 +4044,17 @@ def score_message_hybrid(message, all_texts, all_categories, model=None,
             use_extraction=use_extraction)
         knn_score = knn_info.get("knn_score", 0.0)
 
-    # --- Merge voters: union of cosine top-K and NLI top-K ---
-    cos_voters = knn_info.get("top_k_details", [])  # list of (sim, is_pos, text)
-    nli_voters = nli_debug.get("voters", [])  # list of dicts
-
-    # Build union by anchor text (deduplicate)
-    seen_texts = set()
-    merged_pos = 0
-    merged_total = 0
-
-    # Add cosine voters
-    for sim, is_pos, text in cos_voters:
-        key = text[:80]
-        if key not in seen_texts:
-            seen_texts.add(key)
-            merged_total += 1
-            if is_pos:
-                merged_pos += 1
-
-    # Add NLI voters (only those not already in cosine set)
-    for v in nli_voters:
-        key = v.get("text", "")[:80]
-        if key not in seen_texts:
-            seen_texts.add(key)
-            merged_total += 1
-            if v.get("is_positive", False):
-                merged_pos += 1
-
-    # Hybrid score = simple count ratio across merged voters
-    hybrid_score = merged_pos / max(1, merged_total)
-
+    # --- Stack voters: cosine top-K + NLI top-K ---
     cos_pos = knn_info.get("pos_in_k", 0)
     cos_k = knn_info.get("k", 0)
     nli_pos = nli_debug.get("pos_in_k", 0)
-    nli_neg = nli_debug.get("neg_in_k", 0)
+    nli_k = nli_debug.get("vote_k", NLI_VOTE_K)
+
+    merged_pos = cos_pos + nli_pos
+    merged_total = cos_k + nli_k
+
+    # Hybrid score = simple count across all voters
+    hybrid_score = merged_pos / max(1, merged_total)
 
     # Build results list
     anchor_order = sorted(range(len(all_texts)),
@@ -4012,7 +4070,7 @@ def score_message_hybrid(message, all_texts, all_categories, model=None,
         "nli_score": nli_score,
         "knn_score": knn_score,
         "nli_pos_in_k": nli_pos,
-        "nli_neg_in_k": nli_neg,
+        "nli_k": nli_k,
         "cos_pos_in_k": cos_pos,
         "cos_k": cos_k,
         "nli_action": nli_debug.get("action", ""),
@@ -4321,8 +4379,8 @@ def print_banner():
         MATCH_THRESHOLD, WARNING_THRESHOLD, COSINE_KNN_K))
     print("  NLI: retrieve={}, vote={}, fwd_weight={}, abstain_margin={}".format(
         NLI_RETRIEVE_K, NLI_VOTE_K, NLI_FWD_WEIGHT, NLI_ABSTAIN_MARGIN))
-    print("  Hybrid: merged KNN (cosine top-{} + NLI top-{}, count positives)".format(
-        COSINE_KNN_K, NLI_VOTE_K))
+    print("  Hybrid: cosine top-{} + NLI top-{} = {} voters, count positives".format(
+        COSINE_KNN_K, NLI_VOTE_K, COSINE_KNN_K + NLI_VOTE_K))
     print("")
 
 
@@ -4448,8 +4506,7 @@ def display_default_nli(results, corrected, corrections, extraction=None,
         _display_extraction_info(extraction)
     if debug:
         pos_k = debug.get("pos_in_k", 0)
-        neg_k = debug.get("neg_in_k", 0)
-        total_k = pos_k + neg_k
+        total_k = debug.get("vote_k", NLI_VOTE_K)
         act = debug.get("action", "")
         print("  {}NLI KNN: {}/{} ({:.0%}) [{}]{}".format(
             DIM, pos_k, total_k, pos_k / max(1, total_k), act, RESET))
@@ -4476,8 +4533,7 @@ def display_verbose_nli(results, corrected, corrections, extraction=None,
         _display_extraction_info(extraction, verbose=True)
     if debug:
         pos_k = debug.get("pos_in_k", 0)
-        neg_k = debug.get("neg_in_k", 0)
-        total_k = pos_k + neg_k
+        total_k = debug.get("vote_k", NLI_VOTE_K)
         v_margin = debug.get("vote_margin", 0)
         act = debug.get("action", "")
         print("  {}NLI KNN debug:{}".format(BOLD, RESET))
@@ -4520,10 +4576,9 @@ def display_default_hybrid(results, corrected, corrections, extraction=None,
         cos_pos = debug.get("cos_pos_in_k", 0)
         cos_k = debug.get("cos_k", 0)
         nli_pos = debug.get("nli_pos_in_k", 0)
-        nli_neg = debug.get("nli_neg_in_k", 0)
-        nli_total = nli_pos + nli_neg
-        print("  {}Hybrid: cos={}/{} ({:.0%})  nli={}/{} ({:.0%})  → merged={}/{} ({:.0%}){}".format(
-            DIM, cos_pos, cos_k, knn_sc, nli_pos, nli_total, nli_sc,
+        nli_k = debug.get("nli_k", NLI_VOTE_K)
+        print("  {}Hybrid: cos={}/{} ({:.0%})  nli={}/{} ({:.0%})  → total={}/{} ({:.0%}){}".format(
+            DIM, cos_pos, cos_k, knn_sc, nli_pos, nli_k, nli_sc,
             m_pos, m_total, combined, RESET))
 
     print("\n  {}\n".format(format_verdict(top_score, neg_score)))
@@ -4560,10 +4615,9 @@ def display_verbose_hybrid(results, corrected, corrections, extraction=None,
         cos_pos = debug.get("cos_pos_in_k", 0)
         cos_k = debug.get("cos_k", 0)
         nli_pos = debug.get("nli_pos_in_k", 0)
-        nli_neg = debug.get("nli_neg_in_k", 0)
-        nli_total = nli_pos + nli_neg
-        print("  {}Hybrid debug: cos={}/{} ({:.0%})  nli={}/{} ({:.0%})  → merged={}/{} ({:.0%}){}".format(
-            DIM, cos_pos, cos_k, knn_sc, nli_pos, nli_total, nli_sc,
+        nli_k = debug.get("nli_k", NLI_VOTE_K)
+        print("  {}Hybrid debug: cos={}/{} ({:.0%})  nli={}/{} ({:.0%})  → total={}/{} ({:.0%}){}".format(
+            DIM, cos_pos, cos_k, knn_sc, nli_pos, nli_k, nli_sc,
             m_pos, m_total, combined, RESET))
 
     print("\n  {}\n".format(format_verdict(top_score, neg_score)))
@@ -4579,7 +4633,7 @@ def display_verbose_hybrid(results, corrected, corrections, extraction=None,
             zone = " " + YELLOW + "\u25c4 WARN" + RESET
         print("  {:<5} {:>17}  {}{:<30}{} \"{}\"{}".format(
             rank, cs, DIM, dc, RESET, text, zone))
-    print("\n  {}Total: {} | Hybrid = merged KNN (cosine top-K + NLI top-K){}".format(
+    print("\n  {}Total: {} | Hybrid = cosine top-K + NLI top-K (20+20 voters){}".format(
         DIM, len(results), RESET))
     print()
 
@@ -4863,8 +4917,7 @@ def display_compare(message, mode_results, index=None, total=None):
             nli_debug = mode_results[m].get("debug")
             if nli_debug:
                 nli_pos = nli_debug.get("pos_in_k", 0)
-                nli_neg = nli_debug.get("neg_in_k", 0)
-                nli_total = nli_pos + nli_neg
+                nli_total = nli_debug.get("vote_k", NLI_VOTE_K)
                 s = mode_results[m]["score"]
                 cell = "{}/{} ({:.0%})".format(nli_pos, nli_total, s)
             else:
@@ -4885,22 +4938,6 @@ def display_compare(message, mode_results, index=None, total=None):
             cell = "{:.4f}".format(s)
         row_score += " {:^{}}".format(cell, col_w)
     print(row_score)
-
-    # Max Pos / Neg row
-    row_neg = "  {:<12}".format("Pos / Neg")
-    for m in active_modes:
-        if m == "llm":
-            cell = "--"
-        elif m == "cosine":
-            knn = mode_results[m].get("knn", {})
-            mp = knn.get("max_pos", 0.0)
-            mn = knn.get("max_neg", 0.0)
-            cell = "{:.3f} / {:.3f}".format(mp, mn)
-        else:
-            nc = mode_results[m].get("neg_cos", 0.0)
-            cell = "-- / {:.3f}".format(nc) if nc > 0.01 else "--"
-        row_neg += " {:^{}}".format(cell, col_w)
-    print(row_neg)
 
     print("  " + "\u2500" * (12 + (col_w + 1) * len(active_modes)))
 
@@ -4957,10 +4994,9 @@ def display_compare(message, mode_results, index=None, total=None):
         cos_pos = debug.get("cos_pos_in_k", 0)
         cos_k = debug.get("cos_k", 0)
         nli_pos = debug.get("nli_pos_in_k", 0)
-        nli_neg = debug.get("nli_neg_in_k", 0)
-        nli_total = nli_pos + nli_neg
-        print("  {}Hybrid: cos={}/{} nli={}/{} → merged={}/{} ({:.0%}){}".format(
-            DIM, cos_pos, cos_k, nli_pos, nli_total,
+        nli_k = debug.get("nli_k", NLI_VOTE_K)
+        print("  {}Hybrid: cos={}/{} nli={}/{} → total={}/{} ({:.0%}){}".format(
+            DIM, cos_pos, cos_k, nli_pos, nli_k,
             m_pos, m_total, combined, RESET))
 
     print()
@@ -5404,7 +5440,7 @@ def run_interactive(model, embs, texts, cats, verbose=False, mode="cosine",
     mode_labels = {
         "cosine": "Cosine KNN",
         "nli": "NLI KNN",
-        "hybrid": "Hybrid (merged cosine + NLI KNN)",
+        "hybrid": "Hybrid (cosine + NLI KNN, 20+20 voters)",
         "llm": "LLM Judge",
     }
     mode_label = mode_labels.get(mode, mode)
@@ -5835,7 +5871,7 @@ def main():
             print("  Compare mode: {}ON{} (all scoring methods side-by-side)".format(
                 GREEN, RESET))
         elif mode == "hybrid":
-            print("  Hybrid mode: {}ON{} (merged cosine + NLI KNN)".format(
+            print("  Hybrid mode: {}ON{} (cosine + NLI KNN (20+20 voters))".format(
                 GREEN, RESET))
         else:
             print("  NLI-only mode: {}ON{}".format(GREEN, RESET))
