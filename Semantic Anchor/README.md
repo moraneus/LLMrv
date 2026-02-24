@@ -1,6 +1,6 @@
 # Semantic Anchors Framework
 
-A framework for evaluating natural-language messages against formal propositions using multiple scoring modes: **Cosine KNN voting**, **NLI entailment**, **Hybrid** (cosine + NLI with adaptive weighting), and **LLM-as-judge**.
+A framework for evaluating natural-language messages against formal propositions using multiple scoring modes: **Cosine KNN**, **NLI KNN**, **Hybrid** (merged cosine + NLI KNN), and **LLM-as-judge**.
 
 The generator creates standalone evaluator scripts that run locally with no LLM dependency at inference time (except LLM mode).
 
@@ -40,6 +40,11 @@ embedding_model = all-mpnet-base-v2
 nli_model = cross-encoder/nli-deberta-v3-large
 negative_ratio = 2.0
 hard_positive_ratio = 0.3
+hard_negative_ratio = 0.3
+orthogonal_axes = true
+mmr_anneal = true
+adversarial_filter = true
+variance_threshold = 0.15
 categories = Direct explicit requests,
     Indirect or euphemistic requests,
     Implicit or inferred requests,
@@ -104,8 +109,8 @@ python semantic_anchor_NAME.py
 
 # Scoring modes
 python semantic_anchor_NAME.py --mode cosine    # KNN voting (fast)
-python semantic_anchor_NAME.py --mode nli       # NLI entailment (accurate)
-python semantic_anchor_NAME.py --mode hybrid    # Cosine + NLI (recommended)
+python semantic_anchor_NAME.py --mode nli       # NLI KNN voting (accurate)
+python semantic_anchor_NAME.py --mode hybrid    # Merged cosine + NLI KNN (recommended)
 python semantic_anchor_NAME.py --mode llm       # LLM-as-judge
 
 # Compare all modes side-by-side
@@ -155,133 +160,72 @@ api_key = YOUR_API_KEY_HERE
 spellcheck = false
 
 [thresholds]
-match_threshold = 0.85
-warning_threshold = 0.70
+# KNN voting thresholds (all modes use simple counting):
+#   score <= 0.50  →  NO MATCH
+#   score >  0.50  →  WARNING
+#   score >  0.70  →  MATCH
+match_threshold = 0.70
+warning_threshold = 0.50
+
+# KNN neighborhood size (default: 20)
 knn_size = 20
-hybrid_nli_weight = 0.75
-nli_abstain_margin = 0.15
+
+# NLI cosine pre-filter size (default: 40)
 nli_retrieve_k = 40
+
+# NLI vote neighborhood size (default: 20)
 nli_vote_k = 20
+
+# NLI asymmetric forward weight (default: 0.7)
+# 0.7 = 70% forward (message->anchor) + 30% backward (anchor->message)
 nli_fwd_weight = 0.7
-adaptive_hybrid = true
+
+# NLI abstain margin (default: 0.15)
+# When vote margin is below this, flag as abstain
+nli_abstain_margin = 0.15
 ```
-
-### Threshold Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `match_threshold` | 0.85 | Score >= this → MATCH |
-| `warning_threshold` | 0.70 | Score >= this → WARNING |
-| `knn_size` | 20 | Cosine KNN neighborhood size |
-| `hybrid_nli_weight` | 0.75 | Base NLI weight in hybrid mode (cosine = 1 - this) |
-| `nli_abstain_margin` | 0.15 | Below this evidence margin → abstain |
-| `nli_retrieve_k` | 40 | Cosine pre-filter size for NLI re-ranking |
-| `nli_vote_k` | 20 | KNN vote neighborhood after NLI re-ranking |
-| `nli_fwd_weight` | 0.7 | Forward (message→anchor) weight in asymmetric NLI |
-| `adaptive_hybrid` | true | Dynamically shift weights based on NLI confidence |
-
-**Tuning for broad propositions**: If your proposition covers many subtopics (e.g., "financial fraud" spanning money laundering, tax evasion, forgery, etc.), increase `nli_retrieve_k` to 60–80 so the cosine pre-filter doesn't exclude relevant-subtopic anchors that are far in embedding space from the input.
-
-## Anchor Types
-
-The generator creates four types of anchors, each serving a distinct role in the KNN voting architecture:
-
-### Positive Anchors
-Standard examples that clearly match the proposition. Generated with diversity across categories (direct, euphemistic, fictional framing, etc.) and selected via MMR for maximum spread.
-
-### Hard Positives (Boundary-Straddling)
-Examples that genuinely match the proposition but are **phrased to sound benign or legitimate**. These are the most critical anchors for NLI KNN accuracy.
-
-**Why they matter**: Without hard positives, polite or professional harmful messages (e.g., "How can I do a chargeback on a purchase I'm happy with?") get classified as benign because they are closer to negative anchors in embedding space than to standard positives. Hard positives occupy the boundary region between the positive and negative anchor clouds, ensuring harmful-but-polite messages have enough positive neighbors to win the KNN vote.
-
-**Generation pipeline**:
-1. The LLM sees both positive (obviously harmful) and negative (obviously benign) examples
-2. It generates examples that genuinely match the proposition but mimic the phrasing style of negatives
-3. A second round uses the best hard positives (those closest to negatives in embedding space) as models for further generation
-4. Off-topic results are filtered, and MMR selects the most diverse final set
-
-Configured via `hard_positive_ratio` in `config.ini` (default: 0.3 = 30% of target positive count).
-
-### Negative Anchors (Contrastive)
-Examples that use similar vocabulary to the proposition but have clearly legitimate intent. These compete directly with positives in KNN voting to reduce false positives. Generated at a 2:1 ratio to positives (configurable via `negative_ratio`).
-
-### Neutral Anchors
-Completely off-topic everyday messages used as a baseline. If a message is closer to neutral anchors than to any domain anchors, it is clearly off-topic.
 
 ## Scoring Modes
 
-### Cosine KNN Voting (`--mode cosine`)
+All modes use the same principle: **KNN voting**. Find the K nearest neighbors, count how many are positive. `score = positive_count / total_count`.
 
-Merges all positive and negative anchors into a unified pool, finds the K nearest neighbors (default K=20), and counts the positive ratio.
+### Thresholds
 
-- **Score** = positive neighbors / K (e.g., 17/20 = 85%)
-- **MATCH**: score >= `match_threshold`
-- **WARNING**: score >= `warning_threshold`
-- **NO MATCH**: below `warning_threshold`
+| Score | Verdict |
+|-------|---------|
+| ≤ 50% (e.g. 10/20) | NO MATCH |
+| > 50% to ≤ 70% (e.g. 11-14/20) | WARNING |
+| > 70% (e.g. 15+/20) | MATCH |
 
-Fast, no NLI model needed. Good baseline accuracy. The 2:1 negative-to-positive ratio (configurable via `negative_ratio` in generator config) ensures broad coverage of the benign space.
+Configurable via `match_threshold` and `warning_threshold` in `config_NAME.ini`.
 
-### NLI KNN Voting (`--mode nli`)
-
-Uses the standard bi-encoder retrieve / cross-encoder re-rank pattern with KNN voting on a unified anchor pool (positive + negative). The NLI cross-encoder uses full 3-class scoring (entailment − contradiction) rather than entailment-only, which correctly distinguishes "doing X" from "refusing to do X."
-
-#### Net Scores (E − C)
-
-An NLI cross-encoder classifies each premise→hypothesis pair into three probabilities that sum to 1.0: **Entailment** (premise implies hypothesis is true), **Neutral** (unrelated), and **Contradiction** (premise implies hypothesis is false).
-
-Using entailment alone (E) is unreliable because refusals share vocabulary with harmful content — "I can't help you break into accounts" can get high entailment with a "break into accounts" anchor just from the shared words.
-
-**Net score = max(0, E − C)** uses the full 3-class signal:
-
-| Message | E | C | E − C | Why |
-|---------|---|---|-------|-----|
-| "Here's how to crack a password..." | 0.88 | 0.03 | **0.85** | High entailment, low contradiction → real match |
-| "I can't help with breaking into accounts" | 0.40 | 0.50 | **0.00** | Contradiction exceeds entailment → refusal detected |
-| "What's the weather today?" | 0.05 | 0.10 | **0.00** | Both low → off-topic |
-| "Security testing requires authorization" | 0.30 | 0.25 | **0.05** | Slight entailment → educational, not actionable |
-
-The contradiction signal is what distinguishes refusals from instructions. When the model sees "I refuse to help with hacking" paired with a hacking anchor, it fires *both* entailment (shared topic) and contradiction (opposite intent). E alone cannot tell the difference; E − C can.
-
-#### Pipeline
-1. **Proposition NLI** — direct entailment check between message and proposition using net scores (E − C) with declarative prefix conversion (~2 NLI calls per view)
-2. **Cosine retrieval** — retrieve top candidates from the unified pool (positive + negative anchors) by cosine similarity (configurable via `nli_retrieve_k`, default 40)
-3. **NLI re-rank** — run asymmetric NLI net scores (E − C) on the candidates. Asymmetric weighting configurable via `nli_fwd_weight` (default 70% forward + 30% backward). This prevents short anchors from inflating scores.
-4. **KNN vote** — sort by NLI score, take top `nli_vote_k` (default 20). Evidence-weighted voting:
-   - pos_evidence = sum of NLI scores for positive anchors in top-K
-   - neg_evidence = sum of NLI scores for negative anchors in top-K
-   - nli_knn_score = pos_evidence / (pos_evidence + neg_evidence)
-5. **Final score** = max(proposition score, NLI KNN score)
-6. **Abstain detection** — when evidence margin is below `nli_abstain_margin` (default 0.15), the result is flagged as ambiguous. Consider routing abstains to LLM judge.
-
-Why NLI KNN works: negative anchors (refusals, security education, career advice) compete directly with positive anchors. A refusal about hacking has high NLI scores with both positive and negative anchors, but the negatives (which describe refusals and defensive content) score higher, pushing the ratio down. No gating or suppression logic needed — the voting handles it naturally.
-
-### Hybrid with Adaptive Weighting (`--mode hybrid`)
-
-Weighted blend of NLI KNN voting and Cosine KNN voting with **adaptive confidence-based weighting**:
+### Cosine KNN (`--mode cosine`)
 
 ```
-hybrid_score = nli_weight × nli_knn_score + cos_weight × cosine_knn_score
+Message → embed → find K=20 nearest by cosine → count positive / total
 ```
 
-#### Fixed Mode (`adaptive_hybrid = false`)
+Merges positive and negative anchors into one pool, sorts by cosine similarity, takes top-K, counts. Fast (embedding model only).
 
-Uses constant weights. Default: **75% NLI + 25% cosine KNN** (configurable via `hybrid_nli_weight`).
+### NLI KNN (`--mode nli`)
 
-#### Adaptive Mode (`adaptive_hybrid = true`, default)
+```
+Message → embed → cosine pre-filter top 40 → NLI re-rank → take top 20 → count positive / total
+```
 
-Dynamically adjusts the NLI/cosine blend based on how confident NLI is for each message:
+Uses cosine to retrieve candidates, then a cross-encoder (NLI) to re-rank by entailment strength. The re-ranking determines which 20 make the final vote, but scoring is still a simple count.
 
-**NLI confidence** = how decisive the NLI KNN vote was (0 = split 50/50, 1 = unanimous):
+Why NLI KNN works: negative anchors compete directly with positive anchors in the vote. A refusal about hacking has high NLI scores with both sides, but the negatives score higher in re-ranking, displacing positives from the top-K. No gating or suppression needed — the voting handles it naturally.
 
-| NLI Confidence | Weight Shift | Rationale |
-|----------------|-------------|-----------|
-| Low (< 0.3) | NLI 75% → 40%, Cosine 25% → 60% | NLI is confused (vote near 50/50), cosine neighborhood is more reliable |
-| Medium (0.3–0.7) | No change (75/25) | Standard blend |
-| High (> 0.7) | NLI 75% → 85%, Cosine 25% → 15% | NLI is decisive, trust it more |
+### Hybrid (`--mode hybrid`, recommended)
 
-**Max-lift**: If either mode independently exceeds the match/warning threshold but the blend doesn't, the hybrid score gets a floor boost (30% of the gap). This prevents one uncertain mode from dragging down a strong signal from the other.
+```
+Cosine KNN → 20 voters
+NLI KNN    → 20 voters
+Merge (deduplicate) → up to 40 unique voters → count positive / total
+```
 
-**Why adaptive helps**: For broad propositions (e.g., "financial fraud" spanning many subtopics), NLI often produces near-50/50 votes because the positive anchors from *other* subtopics score poorly. Cosine KNN handles this better since it just measures neighborhood density. Adaptive weighting automatically detects this and shifts toward cosine, recovering accuracy that fixed 75/25 weighting would lose.
+Takes the top-20 from cosine and the top-20 from NLI, merges into a union set (removing duplicates), and counts how many are positive. Combines cosine's spatial signal with NLI's semantic re-ranking while keeping scoring simple.
 
 ### LLM-as-Judge (`--mode llm`)
 
@@ -289,18 +233,16 @@ Sends the proposition and message to an LLM API. Requires `config_NAME.ini` with
 
 ### Compare (`--compare`)
 
-Runs cosine, NLI, hybrid (and LLM if configured) side-by-side. Shows verdict, score, and top-3 matching anchors for each mode in a table.
+Runs cosine, NLI, hybrid (and LLM if configured) side-by-side with verdict, score, and top-3 anchors per mode.
 
 ## Long Message Handling
 
-Messages over 40 words are processed with **proposition-guided extraction**: the embedding model identifies which sentences are semantically relevant to the proposition before scoring. Three views are scored and the best is used:
+Messages over 40 words use **proposition-guided extraction**: the embedding model identifies relevant sentences before scoring. Three views are scored and the best is used:
 1. **Extracted**: Only relevant sentences
 2. **Full**: Entire message
 3. **Window**: Best contiguous text window
 
 ## Interactive Commands
-
-Inside the evaluator's interactive mode:
 
 | Command | Action |
 |---------|--------|
@@ -312,45 +254,67 @@ Inside the evaluator's interactive mode:
 | `/spell` | Toggle spell correction |
 | `/quit` | Exit |
 
+## Automatic Subtopic Decomposition
+
+When a proposition covers multiple behavior types (e.g., "financial fraud" = chargebacks + laundering + tax evasion + forgery), the generator **automatically decomposes into subtopics** with balanced coverage.
+
+1. **Decomposition**: LLM identifies 3-8 distinct subtopics
+2. **Per-subtopic seeds**: Dedicated seeds guarantee initial coverage
+3. **Coverage audit**: Anchors classified to nearest subtopic after MMR
+4. **Gap-filling**: Underrepresented subtopics get targeted generation
+5. **Applies to both positive and negative anchors**
+
+Without decomposition, KNN fails on underrepresented subtopics because the K nearest neighbors come from other subtopics. With decomposition, each gets proportional allocation.
+
+## Adversarial Semantic Mapping
+
+Five strategies for near-perfect anchor distribution, all enabled by default.
+
+1. **Orthogonal Axes** (`orthogonal_axes = true`): LLM identifies 8-12 domain-specific semantic axes merged with static categories for comprehensive coverage.
+
+2. **Annealing MMR** (`mmr_anneal = true`): Decaying λ from 0.8→0.2. Captures core intent first, then fills boundary fringes.
+
+3. **Adversarial Filtering** (`adversarial_filter = true`): Scores hard negative candidates against KNN. Prioritizes those producing highest false-positive rates.
+
+4. **Syntactic Jittering** (always on): 20/20/20/20/20 distribution across imperative, hypothetical, analytical, slang, and narrative structures.
+
+5. **Variance Monitoring** (`variance_threshold = 0.15`): Detects near-identical examples within categories and regenerates with higher diversity.
+
 ## Architecture
 
 ```
-config.ini (LLM provider for generation)
+config.ini (LLM provider)
        |
        v
 semantic_anchor_generator.py
-       |
-       |-- Generates positive anchors (LLM + diversity rounds + MMR)
-       |-- Generates hard positives (boundary-straddling, sound benign but match)
-       |-- Generates negative anchors (2:1 ratio, near-miss examples)
-       |-- Generates neutral anchors (off-topic baselines)
+       |-- Subtopic decomposition + orthogonal axes
+       |-- Positive anchors (per-subtopic + annealing MMR)
+       |-- Negative anchors (boundary-aware mirrors)
+       |-- Hard positives + hard negatives (adversarial-filtered)
+       |-- Variance monitoring + gap-filling
+       |-- Neutral anchors (off-topic baselines)
        |
        v
 semantic_anchor_NAME.py + anchors_list_NAME.json + config_NAME.ini
        |
-       |-- cosine mode:  KNN voting (sentence-transformers only)
-       |-- nli mode:     NLI KNN voting (bi-encoder retrieve + cross-encoder re-rank)
-       |-- hybrid mode:  Adaptive NLI/cosine blend (recommended)
-       +-- llm mode:     LLM API call (requires API key)
+       |-- cosine:  KNN count (top-K by cosine similarity)
+       |-- nli:     KNN count (cosine pre-filter → NLI re-rank → top-K)
+       |-- hybrid:  KNN count (union of cosine + NLI top-K)
+       +-- llm:     LLM API call
 ```
 
-No LLM is needed at evaluation time (except `--mode llm`). All local modes run entirely on CPU with sentence-transformers.
+No LLM needed at evaluation time (except `--mode llm`). All local modes run on CPU.
 
 ## Tuning Guide
 
 ### Broad Propositions (many subtopics)
 
-If your proposition covers diverse territory (e.g., "financial fraud" = money laundering + tax evasion + forgery + chargeback fraud + insider trading):
-
-1. **Increase `nli_retrieve_k`** to 60–80 — ensures cosine pre-filter doesn't exclude relevant-subtopic anchors
-2. **Keep `adaptive_hybrid = true`** — automatically shifts weight toward cosine when NLI is uncertain about broad subtopics
-3. **Generate more anchors** (`-n 40` or higher) — each subtopic needs dedicated positive coverage
-4. **Hard positives help most here** — they fill the boundary gaps where polite/professional harmful requests live
+1. Subtopic decomposition is automatic
+2. Increase `nli_retrieve_k` to 60–80 so the pre-filter doesn't exclude relevant subtopics
+3. Generate more anchors (`-n 40`+) — each subtopic needs dedicated coverage
+4. Hard positives fill boundary gaps, hard negatives reduce false positives
 
 ### Narrow Propositions (single topic)
 
-If your proposition is focused (e.g., "the user requests weapon construction instructions"):
-
-1. **Default `nli_retrieve_k = 40`** is fine — anchor cloud is compact
-2. **NLI works well** — default 75/25 hybrid blend is appropriate
-3. **Fewer anchors suffice** (`-n 20` is often enough)
+1. Default `nli_retrieve_k = 40` is fine
+2. Fewer anchors suffice (`-n 20`)
