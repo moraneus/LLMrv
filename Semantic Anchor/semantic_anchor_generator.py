@@ -722,6 +722,27 @@ def _call_grok(api_key, model, system_prompt, user_prompt, attempt):
     return raw.strip(), finish, None
 
 
+def _call_openrouter(api_key, model, system_prompt, user_prompt, attempt):
+    """OpenRouter API call (OpenAI-compatible, routes to 200+ models)."""
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+    api_params = dict(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        max_tokens=16384,
+    )
+    if not getattr(call_llm, '_skip_temperature', False):
+        api_params["temperature"] = 0.95
+    response = client.chat.completions.create(**api_params)
+    msg = response.choices[0].message
+    finish = response.choices[0].finish_reason
+    raw = msg.content if msg.content else ""
+    return raw.strip(), finish, None
+
+
 def _ollama_ensure_model(model, base_url=None):
     """
     Check if an Ollama model is available locally; pull it if not.
@@ -855,6 +876,7 @@ def _call_local_openai_compat(api_key, model, system_prompt, user_prompt, attemp
 # Register all providers
 PROVIDER_FUNCTIONS["grok"] = _call_grok
 PROVIDER_FUNCTIONS["xai"] = _call_grok
+PROVIDER_FUNCTIONS["openrouter"] = _call_openrouter
 PROVIDER_FUNCTIONS["ollama"] = _call_ollama
 PROVIDER_FUNCTIONS["local"] = _call_local_openai_compat
 PROVIDER_FUNCTIONS["lmstudio"] = _call_local_openai_compat
@@ -875,7 +897,7 @@ def call_llm(config, system_prompt, user_prompt, max_retries=3):
 
     call_fn = PROVIDER_FUNCTIONS.get(provider)
     if call_fn is None:
-        supported = "openai, anthropic/claude, gemini/google, grok/xai, ollama, lmstudio, vllm"
+        supported = "openai, anthropic/claude, gemini/google, grok/xai, openrouter, ollama, lmstudio, vllm"
         print("\n  ERROR: Unknown provider '{}'. Supported: {}".format(
             provider, supported))
         sys.exit(1)
@@ -985,7 +1007,7 @@ def call_llm_raw(config, system_prompt, user_prompt, max_retries=3):
 
     call_fn = PROVIDER_FUNCTIONS.get(provider)
     if call_fn is None:
-        supported = "openai, anthropic/claude, gemini/google, grok/xai, ollama, lmstudio, vllm"
+        supported = "openai, anthropic/claude, gemini/google, grok/xai, openrouter, ollama, lmstudio, vllm"
         print("\n  ERROR: Unknown provider '{}'. Supported: {}".format(
             provider, supported))
         sys.exit(1)
@@ -1250,20 +1272,32 @@ def cluster_constrained_mmr(embeddings, texts, categories, proposition_emb, targ
 
 
 def enforce_subtopic_parity(proposition, subtopics, anchors_dict, knn_size,
-                            emb_model, config, role="user", anchor_type="positive"):
+                            emb_model, config, role="user", anchor_type="positive",
+                            target_n=None):
     """
-    Ensure each subtopic has at least knn_size / num_subtopics anchors.
+    Ensure each subtopic has at least target_n / num_subtopics anchors.
 
-    Without this, a subtopic with 3 anchors gets drowned out by one with 25
-    in KNN voting. This guarantees every subtopic can win enough votes.
-
-    Iterates: after filling one subtopic, recalculates equal_share in case
-    the new total shifts other subtopics below threshold.
+    Uses a FIXED per-subtopic target based on the original target_n, not the
+    current total. This prevents runaway inflation where each fill round
+    increases the total, raising the threshold, making subtopics appear
+    permanently underrepresented.
 
     Returns updated anchors_dict with gap-filled subtopics.
     """
     if not subtopics or len(subtopics) < 2:
         return anchors_dict
+
+    # Fixed per-subtopic target: based on original target, not current total
+    all_texts = []
+    for examples in anchors_dict.values():
+        all_texts.extend(examples)
+
+    if target_n is None:
+        target_n = len(all_texts)  # fallback: use current total once
+
+    per_subtopic_target = max(knn_size, target_n // len(subtopics))
+
+    forced_assignments = {}
 
     MAX_PARITY_ROUNDS = 3
     for parity_round in range(MAX_PARITY_ROUNDS):
@@ -1272,33 +1306,31 @@ def enforce_subtopic_parity(proposition, subtopics, anchors_dict, knn_size,
         for examples in anchors_dict.values():
             all_texts.extend(examples)
 
-        equal_share = len(all_texts) / len(subtopics)
-        min_per_subtopic = max(5, int(equal_share * 0.9))  # at least 90% of equal share
-
         label = "{} (parity check)".format(anchor_type) if parity_round == 0 else \
                 "{} (parity round {})".format(anchor_type, parity_round + 1)
         coverage, assignments = audit_subtopic_coverage(
-            all_texts, subtopics, emb_model, label=label)
+            all_texts, subtopics, emb_model, label=label,
+            forced_assignments=forced_assignments)
 
-        # Find subtopics below minimum
+        # Find subtopics below the FIXED minimum
         underrep = []
         for st_idx, count in coverage.items():
-            if count < min_per_subtopic:
+            if count < per_subtopic_target:
                 underrep.append(st_idx)
 
         if not underrep:
             print("    {}All subtopics meet KNN parity minimum ({} per subtopic){}".format(
-                GREEN, min_per_subtopic, RESET))
+                GREEN, per_subtopic_target, RESET))
             return anchors_dict
 
         print("    {}KNN parity (round {}): {} subtopics below minimum ({}){}".format(
-            YELLOW, parity_round + 1, len(underrep), min_per_subtopic, RESET))
+            YELLOW, parity_round + 1, len(underrep), per_subtopic_target, RESET))
 
-        # Generate gap-filling anchors
-        gap_target = max(5, int(equal_share))
-        gap_texts, gap_cats = generate_subtopic_gap_fill(
+        # Generate gap-filling anchors — only the SHORTFALL, not the full target
+        max_shortfall = max(per_subtopic_target - coverage[st_idx] for st_idx in underrep)
+        gap_texts, gap_cats, gap_st_indices = generate_subtopic_gap_fill(
             proposition, subtopics, underrep, all_texts,
-            gap_target, config, role=role, anchor_type=anchor_type,
+            max_shortfall, config, role=role, anchor_type=anchor_type,
             emb_model=emb_model)
 
         if not gap_texts:
@@ -1306,12 +1338,13 @@ def enforce_subtopic_parity(proposition, subtopics, anchors_dict, knn_size,
                 YELLOW, RESET))
             return anchors_dict
 
-        # Merge into anchors_dict
-        for text, cat in zip(gap_texts, gap_cats):
+        # Merge into anchors_dict and track forced assignments
+        for text, cat, st_idx in zip(gap_texts, gap_cats, gap_st_indices):
             if cat in anchors_dict:
                 anchors_dict[cat].append(text)
             else:
                 anchors_dict[cat] = [text]
+            forced_assignments[text] = st_idx
 
         print("    {}Added {} anchors for subtopic parity{}".format(
             GREEN, len(gap_texts), RESET))
@@ -1694,7 +1727,10 @@ def decompose_proposition(proposition, config, role="user"):
         "into distinct subtopics. Output ONLY valid JSON."
     )
 
-    prompt = (
+    MIN_SUBTOPICS = 3  # always aim for at least this many distinct subtopics
+    STALL_PATIENCE = 3  # stop only if N consecutive retries add 0 new subtopics
+
+    base_prompt = (
         'PROPOSITION: "{}"\n\n'
         'Analyze this proposition and identify its DISTINCT SUBTOPICS — the '
         'separate categories of behavior or intent it covers.\n\n'
@@ -1702,44 +1738,56 @@ def decompose_proposition(proposition, config, role="user"):
         '- Each subtopic must be a SPECIFIC, DISTINCT type of behavior\n'
         '- Subtopics must be MUTUALLY EXCLUSIVE (minimal overlap)\n'
         '- Subtopics must be COLLECTIVELY EXHAUSTIVE (cover the full proposition)\n'
-        '- Each subtopic should be phrased as a SHORT action-oriented description (5-15 words)\n'
-        '- If the proposition covers only ONE specific topic, return just 1 subtopic\n'
-        '- Typical broad propositions have 3-8 subtopics\n'
-        '- Look for explicit examples in the proposition (after "e.g." or in parentheses)\n'
-        '- Also identify IMPLICIT subtopics not explicitly listed but clearly covered\n\n'
+        '- CRITICAL: Use SHORT LABELS (2-6 words). Do NOT repeat the proposition wording.\n'
+        '  BAD:  "Providing instructions for credential theft or password cracking"\n'
+        '  GOOD: "Credential theft & password attacks"\n'
+        '  BAD:  "Providing instructions for social engineering or phishing"\n'
+        '  GOOD: "Social engineering & phishing"\n'
+        '- Think about genuinely DIFFERENT dimensions: methods vs targets vs contexts\n'
+        '- Aim for at least {} subtopics covering different aspects\n'
+        '- If the proposition covers only ONE very specific narrow topic, return just 1 subtopic\n'
+        '- Typical propositions have 3-8 subtopics\n\n'
+        'FORBIDDEN subtopic types (these are styles/meta, NOT content areas):\n'
+        '  ✗ "Actionable implementation details" — this is a STYLE, not a topic\n'
+        '  ✗ "Step-by-step instructions" — this is a FORMAT, not a topic\n'
+        '  ✗ "Practical guidance" — too vague/meta\n'
+        '  ✗ "Direct vs indirect methods" — this is a dimension, not a subtopic\n'
+        'Every subtopic must name a CONCRETE DOMAIN or ACTIVITY that someone '
+        'could generate real-world examples about.\n\n'
         'Output ONLY valid JSON:\n'
-        '{{"subtopics": ["subtopic 1", "subtopic 2", ...], '
+        '{{"subtopics": ["short label 1", "short label 2", ...], '
         '"reasoning": "brief explanation"}}'
-    ).format(proposition)
+    ).format(proposition, MIN_SUBTOPICS)
 
-    result = call_llm(config, system, prompt)
-
-    subtopics = []
-    reasoning = ""
-    try:
-        if isinstance(result, dict):
-            subtopics = result.get("subtopics", [])
-            reasoning = result.get("reasoning", "")
-        elif isinstance(result, list):
-            subtopics = result
-    except Exception:
-        pass
-
-    subtopics = [str(s).strip() for s in subtopics if str(s).strip()]
-
-    # --- Merge overlapping subtopics ---
-    # If two subtopics have cosine similarity > 0.80, they're too similar
-    # to produce distinct anchor neighborhoods. Merge the shorter into the longer.
-    if len(subtopics) >= 2:
+    def _parse_subtopics(result):
+        subtopics = []
+        reasoning = ""
         try:
-            emb_model_name = config.get("anchors", "embedding_model")
-            emb_model = load_embedding_model(emb_model_name)
+            if isinstance(result, dict):
+                subtopics = result.get("subtopics", [])
+                reasoning = result.get("reasoning", "")
+            elif isinstance(result, list):
+                subtopics = result
+        except Exception:
+            pass
+        return [str(s).strip() for s in subtopics if str(s).strip()], reasoning
+
+    # Pre-load embedding model once for all merge checks
+    emb_model_name = config.get("anchors", "embedding_model")
+    emb_model = load_embedding_model(emb_model_name)
+
+    def _merge_similar(subtopics):
+        """Merge subtopics with cosine similarity > threshold. Returns survivors."""
+        if len(subtopics) < 2:
+            return subtopics, []
+        try:
             st_embs = embed_texts(emb_model, subtopics)
             from sentence_transformers.util import cos_sim
             st_sims = cos_sim(st_embs, st_embs)
 
             MERGE_THRESHOLD = 0.80
             merged_away = set()
+            merge_pairs = []
             for i in range(len(subtopics)):
                 if i in merged_away:
                     continue
@@ -1748,18 +1796,93 @@ def decompose_proposition(proposition, config, role="user"):
                         continue
                     sim = float(st_sims[i][j])
                     if sim > MERGE_THRESHOLD:
-                        # Keep the longer (more specific) subtopic
                         keep, drop = (i, j) if len(subtopics[i]) >= len(subtopics[j]) else (j, i)
                         merged_away.add(drop)
+                        merge_pairs.append((subtopics[drop], subtopics[keep], sim))
                         print("    {}Merged subtopic {} (sim={:.2f}):{} \"{}\" → \"{}\"".format(
                             YELLOW, drop + 1, sim, RESET,
                             subtopics[drop][:50], subtopics[keep][:50]))
 
+            survivors = [st for i, st in enumerate(subtopics) if i not in merged_away]
             if merged_away:
-                subtopics = [st for i, st in enumerate(subtopics) if i not in merged_away]
-                print("    {}After merge: {} subtopics{}".format(DIM, len(subtopics), RESET))
+                print("    {}After merge: {} subtopics{}".format(DIM, len(survivors), RESET))
+            return survivors, merge_pairs
         except Exception as e:
             print("    {}Subtopic similarity check failed: {}{}".format(DIM, e, RESET))
+            return subtopics, []
+
+    # --- Initial decomposition ---
+    result = call_llm(config, system, base_prompt)
+    subtopics, reasoning = _parse_subtopics(result)
+    subtopics, merge_pairs = _merge_similar(subtopics)
+
+    # --- Retry until we have MIN_SUBTOPICS distinct subtopics ---
+    retry_num = 0
+    stall_count = 0
+    prev_count = len(subtopics)
+
+    while len(subtopics) < MIN_SUBTOPICS:
+        retry_num += 1
+
+        # Build feedback about what was too similar
+        if merge_pairs:
+            similar_block = "\n".join(
+                '  ✗ "{}" and "{}" (similarity={:.0f}%)'.format(a[:60], b[:60], s * 100)
+                for a, b, s in merge_pairs
+            )
+        else:
+            similar_block = "  (all subtopics were nearly identical)"
+
+        # Show what survived so the LLM doesn't regenerate those
+        kept_block = ""
+        if subtopics:
+            kept_block = "\nKEPT subtopics (do NOT repeat these, add NEW distinct ones):\n"
+            kept_block += "\n".join("  ✓ \"{}\"".format(st) for st in subtopics)
+
+        need = MIN_SUBTOPICS - len(subtopics)
+        retry_prompt = (
+            'PROPOSITION: "{}"\n\n'
+            'Previous subtopics were TOO SIMILAR and got merged:\n'
+            '{}\n'
+            '{}\n\n'
+            'I need {} MORE subtopics (have {}, need {}).\n\n'
+            'THE PROBLEM: You keep generating variations of the same thing.\n'
+            'SOLUTION: Think about COMPLETELY DIFFERENT DIMENSIONS:\n'
+            '  - Different METHODS (technical exploit vs social manipulation vs physical access)\n'
+            '  - Different TARGETS (individuals vs organizations vs infrastructure)\n'
+            '  - Different CONTEXTS (online vs offline, automated vs manual)\n'
+            '  - Different PHASES (reconnaissance, execution, covering tracks)\n'
+            '  - Different MOTIVATIONS (financial, political, personal)\n\n'
+            'CRITICAL FORMAT: Use SHORT LABELS (2-6 words). Do NOT repeat the proposition.\n'
+            '  BAD:  "Providing instructions for credential theft"\n'
+            '  GOOD: "Credential theft & password attacks"\n\n'
+            'Output ONLY valid JSON:\n'
+            '{{"subtopics": ["short label 1", "short label 2", ...], '
+            '"reasoning": "brief explanation"}}'
+        ).format(proposition, similar_block, kept_block,
+                 need, len(subtopics), MIN_SUBTOPICS)
+
+        print("    {}Retrying decomposition (round {}) — have {}, need {}...{}".format(
+            YELLOW, retry_num, len(subtopics), MIN_SUBTOPICS, RESET))
+
+        result = call_llm(config, system, retry_prompt)
+        new_subtopics, reasoning = _parse_subtopics(result)
+
+        # Combine with survivors from previous round, then re-merge
+        combined = list(subtopics) + [s for s in new_subtopics
+                                       if s.lower() not in {x.lower() for x in subtopics}]
+        subtopics, merge_pairs = _merge_similar(combined)
+
+        # Stall detection: if no progress, stop
+        if len(subtopics) <= prev_count:
+            stall_count += 1
+            if stall_count >= STALL_PATIENCE:
+                print("    {}WARNING: {} consecutive retries with no new distinct subtopics — stopping{}".format(
+                    YELLOW, STALL_PATIENCE, RESET))
+                break
+        else:
+            stall_count = 0
+        prev_count = len(subtopics)
 
     if len(subtopics) < 2:
         print("\n  {}Subtopics:{} Proposition is narrow — no decomposition needed".format(
@@ -1880,9 +2003,17 @@ def generate_orthogonal_axes(proposition, subtopics, config, role="user"):
     return axes
 
 
-def audit_subtopic_coverage(texts, subtopics, emb_model, label="anchors"):
+def audit_subtopic_coverage(texts, subtopics, emb_model, label="anchors",
+                            forced_assignments=None):
     """
     Classify each text to its nearest subtopic by embedding similarity.
+
+    Args:
+        forced_assignments: dict of {text: subtopic_index}. If provided,
+            texts with forced assignments use those instead of embedding
+            similarity. This prevents gap-fill examples from being
+            reclassified away from their intended subtopic.
+
     Returns dict of {subtopic_index: count} and list of per-text assignments.
     """
     if not subtopics or len(subtopics) < 2 or not texts:
@@ -1890,10 +2021,21 @@ def audit_subtopic_coverage(texts, subtopics, emb_model, label="anchors"):
 
     from sentence_transformers.util import cos_sim
 
+    if forced_assignments is None:
+        forced_assignments = {}
+
     text_embs = embed_texts(emb_model, texts)
     subtopic_embs = embed_texts(emb_model, subtopics)
     sims = cos_sim(text_embs, subtopic_embs)
-    assignments = sims.argmax(dim=1).tolist()
+    emb_assignments = sims.argmax(dim=1).tolist()
+
+    # Merge: forced assignments override embedding-based ones
+    assignments = []
+    for i, text in enumerate(texts):
+        if text in forced_assignments:
+            assignments.append(forced_assignments[text])
+        else:
+            assignments.append(emb_assignments[i])
 
     coverage = {}
     for st_idx in range(len(subtopics)):
@@ -1936,7 +2078,7 @@ def generate_subtopic_gap_fill(proposition, subtopics, underrep_indices,
          batch and against existing anchors
       4. If still below target, retry with explicit diversity instructions (up to 3 rounds)
 
-    Returns (all_gap_texts, all_gap_cats)
+    Returns (all_gap_texts, all_gap_cats, all_gap_st_indices)
     """
     rc = _role_context(role)
     MAX_ROUNDS = 5  # hard safety cap to prevent infinite loops
@@ -1954,6 +2096,7 @@ def generate_subtopic_gap_fill(proposition, subtopics, underrep_indices,
 
     all_gap_texts = []
     all_gap_cats = []
+    all_gap_st_indices = []
 
     for st_idx in underrep_indices:
         subtopic = subtopics[st_idx]
@@ -2096,13 +2239,14 @@ def generate_subtopic_gap_fill(proposition, subtopics, underrep_indices,
         for t in st_texts:
             all_gap_texts.append(t)
             all_gap_cats.append(st_label)
+            all_gap_st_indices.append(st_idx)
 
         print("      Subtopic {}: \"{}\" → {} examples{}".format(
             st_idx + 1, st_disp, len(st_texts),
             "" if len(st_texts) >= target_per_subtopic
             else " {}(short of {} target){}".format(DIM, target_per_subtopic, RESET)))
 
-    return all_gap_texts, all_gap_cats
+    return all_gap_texts, all_gap_cats, all_gap_st_indices
 
 
 # ---------------------------------------------------------------------------
@@ -2525,29 +2669,40 @@ def generate_diverse_anchors(proposition, categories, target_n, num_rounds, conf
         for cat, examples in final_dict.items():
             final_texts.extend(examples)
 
+        # Fixed per-subtopic target based on ORIGINAL target_n, not current total.
+        # This prevents runaway inflation where adding examples raises the
+        # denominator, making underrepresented subtopics appear permanently short.
+        per_subtopic_target = max(5, target_n // len(subtopics))
+
+        # Track forced subtopic assignments for gap-fill examples.
+        # Without this, audit_subtopic_coverage reclassifies by embedding distance
+        # and meta/abstract subtopics lose all their gap-fill examples.
+        forced_assignments = {}
+
         MAX_GAP_FILL_ROUNDS = 3  # safety cap for iterative balancing
         for gf_round in range(MAX_GAP_FILL_ROUNDS):
             label = "positive anchors" if gf_round == 0 else "positive anchors (after gap-fill round {})".format(gf_round)
             coverage, assignments = audit_subtopic_coverage(
-                final_texts, subtopics, emb_model, label=label)
+                final_texts, subtopics, emb_model, label=label,
+                forced_assignments=forced_assignments)
 
-            # Check for underrepresented subtopics
-            equal_share = len(final_texts) / len(subtopics)
-            min_threshold = max(5, int(equal_share * 0.9))  # at least 90% of equal share
-            underrep = [i for i, c in coverage.items() if c < min_threshold]
+            # Check which subtopics are below the FIXED target
+            underrep = [i for i, c in coverage.items() if c < per_subtopic_target]
 
             if not underrep:
-                print("    {}All subtopics adequately covered ✓{}".format(GREEN, RESET))
+                print("    {}All subtopics meet target ({} per subtopic) ✓{}".format(
+                    GREEN, per_subtopic_target, RESET))
                 break
 
-            # Per-subtopic targets: fill each to equal_share
-            gap_target = max(5, int(equal_share))
-            print("\n    {}Subtopic gap-fill (round {}):{} {} underrepresented subtopic(s) detected, "
-                  "target {} each...".format(
-                      BOLD, gf_round + 1, RESET, len(underrep), gap_target))
+            # Compute shortfall per subtopic — generate only what's needed
+            max_shortfall = max(per_subtopic_target - coverage[i] for i in underrep)
 
-            gap_texts, gap_cats = generate_subtopic_gap_fill(
-                proposition, subtopics, underrep, final_texts, gap_target,
+            print("\n    {}Subtopic gap-fill (round {}):{} {} underrepresented subtopic(s), "
+                  "target {} each (max shortfall {})...".format(
+                      BOLD, gf_round + 1, RESET, len(underrep), per_subtopic_target, max_shortfall))
+
+            gap_texts, gap_cats, gap_st_indices = generate_subtopic_gap_fill(
+                proposition, subtopics, underrep, final_texts, max_shortfall,
                 config, role=role, anchor_type="positive", emb_model=emb_model)
 
             if not gap_texts:
@@ -2555,11 +2710,12 @@ def generate_diverse_anchors(proposition, categories, target_n, num_rounds, conf
                     YELLOW, RESET))
                 break
 
-            # Add gap-fill to final dict
-            for text, cat in zip(gap_texts, gap_cats):
+            # Add gap-fill to final dict and track forced assignments
+            for text, cat, st_idx in zip(gap_texts, gap_cats, gap_st_indices):
                 if cat not in final_dict:
                     final_dict[cat] = []
                 final_dict[cat].append(text)
+                forced_assignments[text] = st_idx
 
             total = sum(len(v) for v in final_dict.values())
             print("    {} Added {} gap-fill anchors (new total: {}){}".format(
@@ -2570,7 +2726,8 @@ def generate_diverse_anchors(proposition, categories, target_n, num_rounds, conf
             # Exhausted all rounds — show final state
             audit_subtopic_coverage(
                 final_texts, subtopics, emb_model,
-                label="positive anchors (after {} gap-fill rounds)".format(MAX_GAP_FILL_ROUNDS))
+                label="positive anchors (after {} gap-fill rounds)".format(MAX_GAP_FILL_ROUNDS),
+                forced_assignments=forced_assignments)
 
     return final_dict
 
@@ -3112,27 +3269,34 @@ def generate_negative_anchors(proposition, positive_anchors_dict, target_n, conf
         for cat, examples in neg_dict.items():
             neg_all_texts.extend(examples)
 
+        # Fixed per-subtopic target based on ORIGINAL target_n, not current total.
+        per_subtopic_target = max(5, target_n // len(subtopics))
+
+        forced_assignments = {}
+
         MAX_GAP_FILL_ROUNDS = 3
         for gf_round in range(MAX_GAP_FILL_ROUNDS):
             label = "negative anchors" if gf_round == 0 else "negative anchors (after gap-fill round {})".format(gf_round)
             coverage, assignments = audit_subtopic_coverage(
-                neg_all_texts, subtopics, emb_model, label=label)
+                neg_all_texts, subtopics, emb_model, label=label,
+                forced_assignments=forced_assignments)
 
-            equal_share = len(neg_all_texts) / len(subtopics)
-            min_threshold = max(5, int(equal_share * 0.9))
-            underrep = [i for i, c in coverage.items() if c < min_threshold]
+            # Check which subtopics are below the FIXED target
+            underrep = [i for i, c in coverage.items() if c < per_subtopic_target]
 
             if not underrep:
-                print("    {}All subtopics adequately covered ✓{}".format(GREEN, RESET))
+                print("    {}All subtopics meet target ({} per subtopic) ✓{}".format(
+                    GREEN, per_subtopic_target, RESET))
                 break
 
-            gap_target = max(5, int(equal_share))
-            print("\n    {}Subtopic gap-fill (round {}):{} {} underrepresented subtopic(s), "
-                  "target {} targeted negatives each...".format(
-                      BOLD, gf_round + 1, RESET, len(underrep), gap_target))
+            max_shortfall = max(per_subtopic_target - coverage[i] for i in underrep)
 
-            gap_texts, gap_cats = generate_subtopic_gap_fill(
-                proposition, subtopics, underrep, neg_all_texts, gap_target,
+            print("\n    {}Subtopic gap-fill (round {}):{} {} underrepresented subtopic(s), "
+                  "target {} negatives each (max shortfall {})...".format(
+                      BOLD, gf_round + 1, RESET, len(underrep), per_subtopic_target, max_shortfall))
+
+            gap_texts, gap_cats, gap_st_indices = generate_subtopic_gap_fill(
+                proposition, subtopics, underrep, neg_all_texts, max_shortfall,
                 config, role=role, anchor_type="negative", emb_model=emb_model)
 
             if not gap_texts:
@@ -3140,10 +3304,11 @@ def generate_negative_anchors(proposition, positive_anchors_dict, target_n, conf
                     YELLOW, RESET))
                 break
 
-            for text, cat in zip(gap_texts, gap_cats):
+            for text, cat, st_idx in zip(gap_texts, gap_cats, gap_st_indices):
                 if cat not in neg_dict:
                     neg_dict[cat] = []
                 neg_dict[cat].append(text)
+                forced_assignments[text] = st_idx
 
             total = sum(len(v) for v in neg_dict.values())
             print("    {} Added {} gap-fill negatives (new total: {}){}".format(
@@ -3153,7 +3318,8 @@ def generate_negative_anchors(proposition, positive_anchors_dict, target_n, conf
         else:
             audit_subtopic_coverage(
                 neg_all_texts, subtopics, emb_model,
-                label="negative anchors (after {} gap-fill rounds)".format(MAX_GAP_FILL_ROUNDS))
+                label="negative anchors (after {} gap-fill rounds)".format(MAX_GAP_FILL_ROUNDS),
+                forced_assignments=forced_assignments)
 
     return neg_dict
 
@@ -5080,6 +5246,29 @@ def _call_llm_judge(message, proposition, top_anchors=None):
             # xAI Grok API (OpenAI-compatible)
             resp = httpx.post(
                 "https://api.x.ai/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer " + api_key,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": 300,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0,
+                },
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            text = data["choices"][0]["message"]["content"]
+
+        elif provider == "openrouter":
+            # OpenRouter API (OpenAI-compatible, routes to 200+ models)
+            resp = httpx.post(
+                "https://openrouter.ai/api/v1/chat/completions",
                 headers={
                     "Authorization": "Bearer " + api_key,
                     "Content-Type": "application/json",
@@ -8443,10 +8632,12 @@ def main():
             BOLD, RESET))
         anchors_dict = enforce_subtopic_parity(
             proposition, subtopics, anchors_dict, knn_size,
-            emb_model, config, role=role, anchor_type="positive")
+            emb_model, config, role=role, anchor_type="positive",
+            target_n=target_n)
         negative_dict = enforce_subtopic_parity(
             proposition, subtopics, negative_dict, knn_size,
-            emb_model, config, role=role, anchor_type="negative")
+            emb_model, config, role=role, anchor_type="negative",
+            target_n=neg_target)
 
     # --- Boundary targeting: train separator, find weak zones, fill gaps ---
     boundary_pos, boundary_neg = boundary_targeted_generation(
@@ -8671,6 +8862,7 @@ def _generate_config_file(output_dir, name, proposition, config=None):
             f.write("#   openai     \u2014 GPT     (api.openai.com)\n")
             f.write("#   gemini     \u2014 Gemini  (generativelanguage.googleapis.com)\n")
             f.write("#   grok       \u2014 Grok    (api.x.ai)\n")
+            f.write("#   openrouter \u2014 Any model via OpenRouter (openrouter.ai)\n")
             f.write("#   ollama     \u2014 Local   (localhost:11434)\n")
             f.write("#   lmstudio   \u2014 Local   (localhost:1234, OpenAI-compatible)\n")
             f.write("#   vllm       \u2014 Local   (localhost:8000, OpenAI-compatible)\n\n")
@@ -8692,6 +8884,10 @@ def _generate_config_file(output_dir, name, proposition, config=None):
             f.write("# provider = grok\n")
             f.write("# model = grok-3-mini-fast\n")
             f.write("# api_key = xai-...\n\n")
+            f.write("# >> OpenRouter (access 200+ models via single API key) <<\n")
+            f.write("# provider = openrouter\n")
+            f.write("# model = anthropic/claude-sonnet-4   # or google/gemini-2.5-flash, etc.\n")
+            f.write("# api_key = sk-or-...\n\n")
             f.write("# >> Local Ollama (free, no API key needed) <<\n")
             f.write("# provider = ollama\n")
             f.write("# model = llama3.1:8b\n")

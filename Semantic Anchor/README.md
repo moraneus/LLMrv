@@ -77,7 +77,9 @@ categories_assistant = Informational responses,
     Risk mitigation responses
 ```
 
-Supported providers: `openai`, `anthropic`, `gemini`, `grok`, `ollama`, `lmstudio`, `vllm`.
+Supported providers: `openai`, `anthropic`, `gemini`, `grok`, `openrouter`, `ollama`, `lmstudio`, `vllm`.
+
+**OpenRouter** lets you access 200+ models (Claude, GPT, Gemini, Llama, Mistral, etc.) through a single API key. Get your key at [openrouter.ai/keys](https://openrouter.ai/keys), then set `provider = openrouter` and use model names like `anthropic/claude-sonnet-4`, `google/gemini-2.5-flash`, `meta-llama/llama-4-scout`, etc.
 
 ## Step 1: Generate an Evaluator
 
