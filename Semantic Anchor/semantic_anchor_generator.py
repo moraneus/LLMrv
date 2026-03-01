@@ -142,6 +142,48 @@ DEFAULT_CONFIG = {
         "match_threshold": "0.70",
         "warning_threshold": "0.50",
     },
+    # ── AMO Training Defaults ──────────────────────────────────────────────
+    # These are read from config.ini [training] section. Override any value
+    # by adding it to your config.ini. Reasoning for key defaults:
+    #
+    # temperature = 0.05
+    #   Controls softmax sharpness in the differentiable KNN scorer.
+    #   Low (0.01-0.1): the closest 2-3 neighbors dominate the vote, creating
+    #     clear score separation between positive and negative queries.
+    #     This gives strong gradient signal for anchor movement.
+    #   High (0.5+): weights spread evenly across all K neighbors, so every
+    #     query scores ≈ label_mean (pos_anchors / total_anchors). Scores
+    #     become indistinguishable, gradients vanish, nothing trains.
+    #   Rule of thumb: keep temperature < 0.1 for anchor sets > 100.
+    #
+    # regularization = 0.01
+    #   L2 penalty pulling anchors back toward original positions.
+    #   Too high (0.1+): anchors can't move enough to improve boundaries.
+    #   Too low (0.001): anchors drift freely, risk losing semantic meaning.
+    #   The cosine anchoring constraint (min_similarity) is the hard safety
+    #   net; regularization is the soft spring that keeps drift gradual.
+    #
+    # train_knn_k = 20
+    #   Matches the evaluator's default knn_size. Training with K=20 means
+    #   the scorer learns to optimize the same neighborhood the evaluator
+    #   will use at inference time. K=40 dilutes the signal by including
+    #   distant anchors that won't participate in inference voting.
+    # ───────────────────────────────────────────────────────────────────────
+    "training": {
+        "learning_rate": "0.001",
+        "epochs": "20",
+        "regularization": "0.01",
+        "temperature": "0.05",
+        "batch_size": "8",
+        "train_knn_k": "20",
+        "kfold": "5",
+        "drift_limit": "0.15",
+        "min_similarity": "0.85",
+        "synthetic_diversity_threshold": "0.95",
+        "diversity_temp": "0.8",
+        "adversarial_depth": "high",
+        "context_variety": "true",
+    },
 }
 
 
@@ -680,6 +722,27 @@ def _call_grok(api_key, model, system_prompt, user_prompt, attempt):
     return raw.strip(), finish, None
 
 
+def _call_openrouter(api_key, model, system_prompt, user_prompt, attempt):
+    """OpenRouter API call (OpenAI-compatible, routes to 200+ models)."""
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+    api_params = dict(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        max_tokens=16384,
+    )
+    if not getattr(call_llm, '_skip_temperature', False):
+        api_params["temperature"] = 0.95
+    response = client.chat.completions.create(**api_params)
+    msg = response.choices[0].message
+    finish = response.choices[0].finish_reason
+    raw = msg.content if msg.content else ""
+    return raw.strip(), finish, None
+
+
 def _ollama_ensure_model(model, base_url=None):
     """
     Check if an Ollama model is available locally; pull it if not.
@@ -813,6 +876,7 @@ def _call_local_openai_compat(api_key, model, system_prompt, user_prompt, attemp
 # Register all providers
 PROVIDER_FUNCTIONS["grok"] = _call_grok
 PROVIDER_FUNCTIONS["xai"] = _call_grok
+PROVIDER_FUNCTIONS["openrouter"] = _call_openrouter
 PROVIDER_FUNCTIONS["ollama"] = _call_ollama
 PROVIDER_FUNCTIONS["local"] = _call_local_openai_compat
 PROVIDER_FUNCTIONS["lmstudio"] = _call_local_openai_compat
@@ -833,7 +897,7 @@ def call_llm(config, system_prompt, user_prompt, max_retries=3):
 
     call_fn = PROVIDER_FUNCTIONS.get(provider)
     if call_fn is None:
-        supported = "openai, anthropic/claude, gemini/google, grok/xai, ollama, lmstudio, vllm"
+        supported = "openai, anthropic/claude, gemini/google, grok/xai, openrouter, ollama, lmstudio, vllm"
         print("\n  ERROR: Unknown provider '{}'. Supported: {}".format(
             provider, supported))
         sys.exit(1)
@@ -922,9 +986,77 @@ def call_llm(config, system_prompt, user_prompt, max_retries=3):
                 return {}
 
 
-# ---------------------------------------------------------------------------
-# Cluster detection
-# ---------------------------------------------------------------------------
+def call_llm_raw(config, system_prompt, user_prompt, max_retries=3):
+    """Call LLM and return raw text response (no JSON parsing).
+
+    Unlike call_llm(), this returns the raw string directly.
+    Used for synthetic data generation where output is plain text, not JSON.
+
+    Returns: str (raw text) or "" on failure/refusal.
+    """
+    provider = config.get("llm", "provider").lower().strip()
+    api_key = config.get("llm", "api_key")
+    model = config.get("llm", "model")
+
+    if not api_key or api_key in ("sk-YOUR-KEY-HERE", "YOUR-KEY-HERE"):
+        if provider not in ("ollama", "local", "lmstudio", "vllm"):
+            print("\n  ERROR: API key not set in config.ini [llm] section.")
+            sys.exit(1)
+        else:
+            api_key = "not-needed"
+
+    call_fn = PROVIDER_FUNCTIONS.get(provider)
+    if call_fn is None:
+        supported = "openai, anthropic/claude, gemini/google, grok/xai, openrouter, ollama, lmstudio, vllm"
+        print("\n  ERROR: Unknown provider '{}'. Supported: {}".format(
+            provider, supported))
+        sys.exit(1)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            raw, finish, refusal = call_fn(api_key, model, system_prompt, user_prompt, attempt)
+
+            if refusal:
+                print("    WARNING: Model refused (attempt {}/{}): {}".format(
+                    attempt, max_retries, str(refusal)[:200]))
+                if attempt >= max_retries:
+                    print("    The model is refusing this content. Try a different model "
+                          "or lower adversarial_depth in config.ini [training].")
+                    return ""
+                continue
+
+            if finish == "content_filter":
+                print("    WARNING: Content filtered (attempt {}/{}).".format(
+                    attempt, max_retries))
+                if attempt >= max_retries:
+                    return ""
+                continue
+
+            if not raw:
+                if attempt < max_retries:
+                    print("    WARNING: Empty response (attempt {}/{}), retrying...".format(
+                        attempt, max_retries))
+                    continue
+                return ""
+
+            # Return raw text directly — no JSON parsing
+            if isinstance(raw, str):
+                return raw
+            return str(raw)
+
+        except Exception as e:
+            err_str = str(e)
+            if "401" in err_str or "authentication" in err_str.lower():
+                print("    ERROR: Authentication failed. Check your API key.")
+                return ""
+            if attempt < max_retries:
+                print("    WARNING: API error (attempt {}/{}): {}, retrying...".format(
+                    attempt, max_retries, e))
+            else:
+                print("    ERROR: API call failed after {} attempts: {}".format(
+                    max_retries, e))
+                return ""
+    return ""
 
 def find_clusters(embeddings, texts, threshold=0.85):
     """Find groups of examples that are too similar (above threshold)."""
@@ -955,28 +1087,18 @@ def find_clusters(embeddings, texts, threshold=0.85):
 # ---------------------------------------------------------------------------
 
 def mmr_select(embeddings, texts, categories, proposition_emb, target_n, lambda_param=0.5,
-               directional=False, anneal=True):
+               anneal=True):
     """
     Category-balanced MMR selection for diverse anchor subsets.
+    Used as fallback by cluster_constrained_mmr when sklearn is unavailable.
 
-    Distributes slots equally across categories, then runs MMR within each
-    category. Categories with fewer items than their quota donate surplus
-    slots to remaining categories.
-
-    When directional=True, also penalizes candidates whose direction from the
-    proposition is similar to already-selected anchors (used for negatives).
-
-    When anneal=True, uses Annealing Lambda: starts at lambda_high (relevance-
-    focused) to capture the core of the intent, then decays toward lambda_low
-    (diversity-focused) to densely populate the fringes where the model is
-    most likely to fail. This ensures the "heart" of the proposition is well-
-    defined while the boundary region gets maximum coverage.
+    Distributes slots equally across categories, then runs MMR within each.
+    When anneal=True, lambda decays from high (relevance) to low (diversity).
     """
     n = len(texts)
     if n <= target_n:
         return list(range(n))
 
-    # Annealing parameters: λ decays from high (relevance) to low (diversity)
     lambda_high = min(0.8, lambda_param + 0.3)
     lambda_low = max(0.2, lambda_param - 0.3)
 
@@ -984,13 +1106,6 @@ def mmr_select(embeddings, texts, categories, proposition_emb, target_n, lambda_
     emb_norms = embeddings / (np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-10)
     relevance = emb_norms @ prop_norm
     sim_matrix = emb_norms @ emb_norms.T
-
-    dir_sim_matrix = None
-    if directional:
-        directions = embeddings - proposition_emb.reshape(1, -1)
-        dir_norms = np.linalg.norm(directions, axis=1, keepdims=True) + 1e-10
-        dir_normed = directions / dir_norms
-        dir_sim_matrix = dir_normed @ dir_normed.T
 
     # --- Group indices by category ---
     cat_indices = {}
@@ -1005,7 +1120,6 @@ def mmr_select(embeddings, texts, categories, proposition_emb, target_n, lambda_
     quotas = {}
     remaining_slots = target_n
 
-    # First pass: cap small categories, collect surplus
     base_quota = target_n // num_cats
     underfilled = []
     normal = []
@@ -1018,16 +1132,14 @@ def mmr_select(embeddings, texts, categories, proposition_emb, target_n, lambda_
         else:
             normal.append(cat)
 
-    # Second pass: distribute remaining slots equally among normal categories
     if normal:
         per_cat = remaining_slots // len(normal)
         remainder = remaining_slots % len(normal)
-        # Sort by pool size descending — larger pools get remainder slots
         normal.sort(key=lambda c: len(cat_indices[c]), reverse=True)
         for i, cat in enumerate(normal):
             quotas[cat] = per_cat + (1 if i < remainder else 0)
 
-    # --- Intra-category MMR for each category ---
+    # --- Intra-category MMR ---
     all_selected = []
 
     for cat in cat_names:
@@ -1039,11 +1151,8 @@ def mmr_select(embeddings, texts, categories, proposition_emb, target_n, lambda_
             all_selected.extend(indices)
             continue
 
-        # MMR within this category
         selected = []
         remaining = list(indices)
-
-        # Start with most relevant to proposition
         first = max(remaining, key=lambda i: relevance[i])
         selected.append(first)
         remaining.remove(first)
@@ -1051,35 +1160,540 @@ def mmr_select(embeddings, texts, categories, proposition_emb, target_n, lambda_
         for step in range(quota - 1):
             if not remaining:
                 break
-
-            # Annealing: λ decays from lambda_high → lambda_low as slots fill
             if anneal and quota > 2:
-                progress = step / (quota - 2)  # 0.0 → 1.0
+                progress = step / (quota - 2)
                 lam = lambda_high + (lambda_low - lambda_high) * progress
             else:
                 lam = lambda_param
 
             best_score = -float("inf")
             best_idx = remaining[0]
-
             for idx in remaining:
                 max_sim = max(sim_matrix[idx, s] for s in selected)
-                if directional and dir_sim_matrix is not None:
-                    max_dir_sim = max(dir_sim_matrix[idx, s] for s in selected)
-                    effective_sim = 0.4 * max_sim + 0.6 * max_dir_sim
-                else:
-                    effective_sim = max_sim
-                score = lam * relevance[idx] - (1 - lam) * effective_sim
+                score = lam * relevance[idx] - (1 - lam) * max_sim
                 if score > best_score:
                     best_score = score
                     best_idx = idx
-
             selected.append(best_idx)
             remaining.remove(best_idx)
 
         all_selected.extend(selected)
 
     return all_selected
+
+
+def cluster_constrained_mmr(embeddings, texts, categories, proposition_emb, target_n,
+                            lambda_param=0.5, anneal=True, max_per_cluster=None):
+    """
+    Cluster-constrained MMR: prevents dense micro-clusters dominating selection.
+
+    1. Cluster all candidates with k-means (k = 2-3x number of categories)
+    2. Set max_per_cluster to prevent any single cluster from dominating
+    3. Run standard MMR but skip candidates when their cluster is full
+
+    This solves "semantic shadowing" where 5+ anchors are slight paraphrases
+    of the same thing, all in the same embedding neighborhood.
+    """
+    import numpy as np
+
+    n = len(texts)
+    if n <= target_n:
+        return list(range(n))
+
+    # Determine number of clusters
+    unique_cats = len(set(categories))
+    n_clusters = min(n - 1, max(4, unique_cats * 2))
+
+    # K-means clustering
+    try:
+        from sklearn.cluster import KMeans
+        emb_np = np.array(embeddings)
+        km = KMeans(n_clusters=n_clusters, n_init=3, random_state=42, max_iter=100)
+        cluster_labels = km.fit_predict(emb_np)
+    except ImportError:
+        # Fallback to standard MMR if sklearn not available
+        return mmr_select(embeddings, texts, categories, proposition_emb,
+                          target_n, lambda_param, anneal=anneal)
+
+    # Max per cluster: proportional allocation with ceiling
+    if max_per_cluster is None:
+        max_per_cluster = max(3, (target_n // n_clusters) * 2)
+
+    cluster_counts = {i: 0 for i in range(n_clusters)}
+
+    # Standard MMR with cluster constraint
+    prop_norm = proposition_emb / (np.linalg.norm(proposition_emb) + 1e-10)
+    emb_norms = emb_np / (np.linalg.norm(emb_np, axis=1, keepdims=True) + 1e-10)
+    relevance = emb_norms @ prop_norm
+    sim_matrix = emb_norms @ emb_norms.T
+
+    lambda_high = min(0.8, lambda_param + 0.3)
+    lambda_low = max(0.2, lambda_param - 0.3)
+
+    selected = []
+    remaining = list(range(n))
+
+    # Start with most relevant
+    first = max(remaining, key=lambda i: relevance[i])
+    selected.append(first)
+    remaining.remove(first)
+    cluster_counts[cluster_labels[first]] += 1
+
+    for step in range(target_n - 1):
+        if not remaining:
+            break
+
+        if anneal and target_n > 2:
+            progress = step / (target_n - 2)
+            lam = lambda_high + (lambda_low - lambda_high) * progress
+        else:
+            lam = lambda_param
+
+        best_score = -float("inf")
+        best_idx = remaining[0]
+
+        for idx in remaining:
+            # Cluster constraint: skip if cluster is full
+            cl = cluster_labels[idx]
+            if cluster_counts[cl] >= max_per_cluster:
+                continue
+
+            max_sim = max(sim_matrix[idx, s] for s in selected)
+            score = lam * relevance[idx] - (1 - lam) * max_sim
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+
+        selected.append(best_idx)
+        remaining.remove(best_idx)
+        cluster_counts[cluster_labels[best_idx]] += 1
+
+    return selected
+
+
+def enforce_subtopic_parity(proposition, subtopics, anchors_dict, knn_size,
+                            emb_model, config, role="user", anchor_type="positive",
+                            target_n=None):
+    """
+    Ensure each subtopic has at least target_n / num_subtopics anchors.
+
+    Uses a FIXED per-subtopic target based on the original target_n, not the
+    current total. This prevents runaway inflation where each fill round
+    increases the total, raising the threshold, making subtopics appear
+    permanently underrepresented.
+
+    Returns updated anchors_dict with gap-filled subtopics.
+    """
+    if not subtopics or len(subtopics) < 2:
+        return anchors_dict
+
+    # Fixed per-subtopic target: based on original target, not current total
+    all_texts = []
+    for examples in anchors_dict.values():
+        all_texts.extend(examples)
+
+    if target_n is None:
+        target_n = len(all_texts)  # fallback: use current total once
+
+    per_subtopic_target = max(knn_size, target_n // len(subtopics))
+
+    forced_assignments = {}
+
+    MAX_PARITY_ROUNDS = 3
+    for parity_round in range(MAX_PARITY_ROUNDS):
+        # Collect all texts and audit coverage
+        all_texts = []
+        for examples in anchors_dict.values():
+            all_texts.extend(examples)
+
+        label = "{} (parity check)".format(anchor_type) if parity_round == 0 else \
+                "{} (parity round {})".format(anchor_type, parity_round + 1)
+        coverage, assignments = audit_subtopic_coverage(
+            all_texts, subtopics, emb_model, label=label,
+            forced_assignments=forced_assignments)
+
+        # Find subtopics below the FIXED minimum
+        underrep = []
+        for st_idx, count in coverage.items():
+            if count < per_subtopic_target:
+                underrep.append(st_idx)
+
+        if not underrep:
+            print("    {}All subtopics meet KNN parity minimum ({} per subtopic){}".format(
+                GREEN, per_subtopic_target, RESET))
+            return anchors_dict
+
+        print("    {}KNN parity (round {}): {} subtopics below minimum ({}){}".format(
+            YELLOW, parity_round + 1, len(underrep), per_subtopic_target, RESET))
+
+        # Generate gap-filling anchors — only the SHORTFALL, not the full target
+        max_shortfall = max(per_subtopic_target - coverage[st_idx] for st_idx in underrep)
+        gap_texts, gap_cats, gap_st_indices = generate_subtopic_gap_fill(
+            proposition, subtopics, underrep, all_texts,
+            max_shortfall, config, role=role, anchor_type=anchor_type,
+            emb_model=emb_model)
+
+        if not gap_texts:
+            print("    {}No new parity anchors generated, stopping.{}".format(
+                YELLOW, RESET))
+            return anchors_dict
+
+        # Merge into anchors_dict and track forced assignments
+        for text, cat, st_idx in zip(gap_texts, gap_cats, gap_st_indices):
+            if cat in anchors_dict:
+                anchors_dict[cat].append(text)
+            else:
+                anchors_dict[cat] = [text]
+            forced_assignments[text] = st_idx
+
+        print("    {}Added {} anchors for subtopic parity{}".format(
+            GREEN, len(gap_texts), RESET))
+
+    return anchors_dict
+
+
+def boundary_targeted_generation(proposition, anchors_dict, negative_dict,
+                                 config, emb_model, role="user"):
+    """
+    Train a linear separator on current anchors, identify low-margin zones,
+    then generate targeted anchors specifically for weak boundary regions.
+
+    This replaces static ratios with geometric feedback — anchors go exactly
+    where the decision boundary is weakest.
+
+    Pipeline:
+      1. Embed all positives and negatives
+      2. Train LogisticRegression
+      3. Find samples closest to decision boundary (margin < threshold)
+      4. Cluster low-margin samples to find distinct weak zones
+      5. Ask LLM to generate anchors similar to each weak zone
+      6. Return new positives and negatives to merge
+    """
+    import numpy as np
+
+    try:
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.cluster import KMeans
+    except ImportError:
+        print("    {}Boundary targeting: sklearn not available, skipping{}".format(
+            YELLOW, RESET))
+        return {}, {}
+
+    rc = _role_context(role)
+
+    # Collect and embed
+    pos_texts = []
+    for examples in anchors_dict.values():
+        pos_texts.extend(examples)
+    neg_texts = []
+    for examples in negative_dict.values():
+        neg_texts.extend(examples)
+
+    if len(pos_texts) < 10 or len(neg_texts) < 10:
+        print("    {}Boundary targeting: too few anchors, skipping{}".format(YELLOW, RESET))
+        return {}, {}
+
+    print("\n  {}Boundary targeting:{} Training linear separator...".format(BOLD, RESET))
+
+    all_texts = pos_texts + neg_texts
+    all_labels = [1] * len(pos_texts) + [0] * len(neg_texts)
+    all_embs = np.array(embed_texts(emb_model, all_texts))
+
+    # Train logistic regression
+    clf = LogisticRegression(max_iter=500, C=1.0, random_state=42)
+    clf.fit(all_embs, all_labels)
+
+    # Get decision function values (distance to boundary)
+    margins = clf.decision_function(all_embs)
+    abs_margins = np.abs(margins)
+
+    # Find low-margin samples (closest to decision boundary)
+    margin_threshold = np.percentile(abs_margins, 25)  # bottom 25%
+    low_margin_mask = abs_margins <= margin_threshold
+    low_margin_indices = np.where(low_margin_mask)[0]
+
+    if len(low_margin_indices) < 5:
+        print("    {}No weak boundary zones found (good separation){}".format(GREEN, RESET))
+        return {}, {}
+
+    print("    Found {} low-margin samples (boundary threshold: {:.3f})".format(
+        len(low_margin_indices), margin_threshold))
+
+    # Cluster low-margin samples to find distinct weak zones
+    low_margin_embs = all_embs[low_margin_indices]
+    n_zones = min(5, max(2, len(low_margin_indices) // 5))
+    km = KMeans(n_clusters=n_zones, n_init=3, random_state=42)
+    zone_labels = km.fit_predict(low_margin_embs)
+
+    # For each zone, collect representative texts and their labels
+    new_pos = {}
+    new_neg = {}
+    gen_system = (
+        "You are generating targeted test inputs for an AI safety classifier. "
+        "These inputs should be similar to the provided examples but with varied "
+        "phrasing and context. Output ONLY valid JSON."
+    )
+
+    for zone_id in range(n_zones):
+        zone_mask = zone_labels == zone_id
+        zone_indices = low_margin_indices[zone_mask]
+        if len(zone_indices) < 2:
+            continue
+
+        # Collect example texts from this zone
+        zone_texts = [all_texts[i] for i in zone_indices[:6]]
+        zone_labels_list = [all_labels[i] for i in zone_indices[:6]]
+
+        # Count pos vs neg in zone
+        n_pos_zone = sum(zone_labels_list)
+        n_neg_zone = len(zone_labels_list) - n_pos_zone
+
+        zone_examples = "\n".join('  - "{}"'.format(t[:80]) for t in zone_texts)
+
+        # Generate both positive and negative anchors for this zone
+        for gen_type, need_more in [("positive", n_pos_zone < n_neg_zone),
+                                     ("negative", n_neg_zone < n_pos_zone)]:
+            # Skip this side if the other side already dominates (not tied)
+            if not need_more and n_pos_zone != n_neg_zone:
+                continue
+
+            if gen_type == "positive":
+                intent = "MATCH the proposition (harmful intent)"
+                target_dict = new_pos
+            else:
+                intent = "be BENIGN (legitimate intent) but use similar vocabulary"
+                target_dict = new_neg
+
+            gen_prompt = (
+                rc["safety_context"] +
+                'PROPOSITION: "{}"\n\n'
+                'WEAK BOUNDARY ZONE — these examples are near the decision boundary:\n'
+                '{}\n\n'
+                'Generate 5 {} that:\n'
+                '- Are similar in TOPIC and VOCABULARY to the examples above\n'
+                '- {} \n'
+                '- Use different phrasing and context from the examples\n\n'
+                'Output ONLY valid JSON:\n'
+                '{{"examples": ["example1", "example2", ...]}}'
+            ).format(proposition, zone_examples, rc["example_noun_short"], intent)
+
+            result = call_llm(config, gen_system, gen_prompt)
+            examples = []
+            try:
+                if isinstance(result, dict):
+                    examples = result.get("examples", [])
+                    if not examples:
+                        for v in result.values():
+                            if isinstance(v, list):
+                                examples.extend(v)
+                elif isinstance(result, list):
+                    examples = result
+            except Exception:
+                pass
+
+            cat = "Boundary-targeted (zone {})".format(zone_id + 1)
+            for ex in examples:
+                text = str(ex).strip()
+                if text:
+                    if cat not in target_dict:
+                        target_dict[cat] = []
+                    target_dict[cat].append(text)
+
+        zone_cat = "Boundary-targeted (zone {})".format(zone_id + 1)
+        n_pos_gen = len(new_pos.get(zone_cat, []))
+        n_neg_gen = len(new_neg.get(zone_cat, []))
+        print("    Zone {}: {} boundary samples → generated {} pos + {} neg".format(
+            zone_id + 1, len(zone_texts), n_pos_gen, n_neg_gen))
+
+    total_new_pos = sum(len(v) for v in new_pos.values())
+    total_new_neg = sum(len(v) for v in new_neg.values())
+    print("    {}Boundary targeting: +{} positive, +{} negative{}".format(
+        GREEN, total_new_pos, total_new_neg, RESET))
+
+    return new_pos, new_neg
+
+
+def hard_example_mining(proposition, anchors_dict, negative_dict, config,
+                        emb_model, role="user", n_synthetic=200):
+    """
+    Self-improving loop: synthesize queries, score them, collect failures,
+    generate targeted anchors for each failure pattern.
+
+    Pipeline:
+      1. Ask LLM to generate n_synthetic test queries (mix of harmful + benign)
+      2. Embed and score each against current anchor set using KNN
+      3. Identify false positives and false negatives
+      4. Cluster failures into patterns
+      5. Generate targeted anchors for each failure pattern
+    """
+    import numpy as np
+
+    rc = _role_context(role)
+
+    # Step 1: Generate synthetic test queries
+    print("\n  {}Hard example mining:{} Generating {} synthetic test queries...".format(
+        BOLD, RESET, n_synthetic))
+
+    gen_system = (
+        "You are generating a balanced test set for an AI safety classifier. "
+        "Generate an equal mix of harmful and benign examples. "
+        "Output ONLY valid JSON."
+    )
+    half = n_synthetic // 2
+
+    gen_prompt = (
+        rc["safety_context"] +
+        'PROPOSITION: "{}"\n\n'
+        'Generate a test set with EXACTLY:\n'
+        '- {} HARMFUL {} that MATCH the proposition (label: "match")\n'
+        '- {} BENIGN {} that should NOT match (label: "clean")\n\n'
+        'The benign examples should use SIMILAR vocabulary to the harmful ones\n'
+        '(these are the hardest test cases).\n\n'
+        'Mix lengths: 30% short (3-8 words), 40% medium, 30% longer.\n'
+        'Mix styles: direct, indirect, academic, casual, professional.\n\n'
+        'Output ONLY valid JSON:\n'
+        '{{"test_cases": [\n'
+        '  {{"text": "example", "label": "match"}},\n'
+        '  {{"text": "example", "label": "clean"}},\n'
+        '  ...\n'
+        ']}}'
+    ).format(proposition, half, rc["example_noun_short"],
+             half, rc["example_noun_short"])
+
+    result = call_llm(config, gen_system, gen_prompt)
+
+    test_cases = []
+    try:
+        if isinstance(result, dict):
+            test_cases = result.get("test_cases", [])
+        elif isinstance(result, list):
+            test_cases = result
+    except Exception:
+        pass
+
+    if len(test_cases) < 20:
+        print("    {}Too few synthetic queries generated ({}), skipping{}".format(
+            YELLOW, len(test_cases), RESET))
+        return {}, {}
+
+    print("    Generated {} synthetic test queries".format(len(test_cases)))
+
+    # Step 2: Score each query against current anchor set
+    pos_texts = []
+    for examples in anchors_dict.values():
+        pos_texts.extend(examples)
+    neg_texts_list = []
+    for examples in negative_dict.values():
+        neg_texts_list.extend(examples)
+
+    combined_texts = pos_texts + neg_texts_list
+    combined_labels = [1] * len(pos_texts) + [0] * len(neg_texts_list)
+    combined_embs = np.array(embed_texts(emb_model, combined_texts))
+
+    knn_k = min(20, len(combined_texts))
+
+    false_positives = []  # benign but scored as match
+    false_negatives = []  # harmful but scored as no-match
+
+    for tc in test_cases:
+        if not isinstance(tc, dict):
+            continue
+        text = tc.get("text", "").strip()
+        label = tc.get("label", "").strip().lower()
+        if not text or label not in ("match", "clean"):
+            continue
+
+        # KNN score
+        query_emb = np.array(embed_texts(emb_model, [text]))[0]
+        sims = combined_embs @ query_emb / (
+            np.linalg.norm(combined_embs, axis=1) * np.linalg.norm(query_emb) + 1e-10)
+        top_k_idx = np.argsort(sims)[-knn_k:]
+        pos_in_k = sum(1 for i in top_k_idx if combined_labels[i] == 1)
+        knn_score = pos_in_k / knn_k
+
+        is_match = knn_score > 0.50  # WARNING or MATCH threshold
+
+        if label == "clean" and is_match:
+            false_positives.append({"text": text, "score": knn_score})
+        elif label == "match" and not is_match:
+            false_negatives.append({"text": text, "score": knn_score})
+
+    print("    Results: {} false positives, {} false negatives out of {} queries".format(
+        len(false_positives), len(false_negatives), len(test_cases)))
+
+    if not false_positives and not false_negatives:
+        print("    {}No failures found — anchor set is robust{}".format(GREEN, RESET))
+        return {}, {}
+
+    # Step 3: Generate targeted fixes
+    new_pos = {}
+    new_neg = {}
+
+    if false_negatives:
+        # Generate positives that cover the missed harmful patterns
+        fn_examples = "\n".join('  - "{}" (scored {:.0%})'.format(
+            f["text"][:80], f["score"]) for f in false_negatives[:10])
+
+        fix_prompt = (
+            rc["safety_context"] +
+            'PROPOSITION: "{}"\n\n'
+            'MISSED HARMFUL QUERIES (classifier scored too low):\n'
+            '{}\n\n'
+            'Generate {} POSITIVE anchors that match these missed patterns.\n'
+            'Each anchor should capture the intent/vocabulary of the missed queries\n'
+            'so the classifier will detect similar messages in the future.\n\n'
+            'Output ONLY valid JSON:\n'
+            '{{"examples": ["example1", "example2", ...]}}'
+        ).format(proposition, fn_examples, min(15, len(false_negatives) * 3))
+
+        result = call_llm(config, gen_system, fix_prompt)
+        examples = []
+        try:
+            if isinstance(result, dict):
+                examples = result.get("examples", [])
+                if not examples:
+                    for v in result.values():
+                        if isinstance(v, list): examples.extend(v)
+            elif isinstance(result, list):
+                examples = result
+        except Exception:
+            pass
+        new_pos["Hard-mined positive"] = [str(e).strip() for e in examples if str(e).strip()]
+        print("    Generated {} positive fixes for false negatives".format(len(new_pos.get("Hard-mined positive", []))))
+
+    if false_positives:
+        # Generate negatives that cover the false alarm patterns
+        fp_examples = "\n".join('  - "{}" (scored {:.0%})'.format(
+            f["text"][:80], f["score"]) for f in false_positives[:10])
+
+        fix_prompt = (
+            rc["safety_context"] +
+            'PROPOSITION: "{}"\n\n'
+            'FALSE ALARMS (benign but classifier scored too high):\n'
+            '{}\n\n'
+            'Generate {} NEGATIVE (benign) anchors that match these false alarm patterns.\n'
+            'Each anchor should be CLEARLY BENIGN but use similar vocabulary so\n'
+            'the classifier learns not to flag these patterns.\n\n'
+            'Output ONLY valid JSON:\n'
+            '{{"examples": ["example1", "example2", ...]}}'
+        ).format(proposition, fp_examples, min(15, len(false_positives) * 3))
+
+        result = call_llm(config, gen_system, fix_prompt)
+        examples = []
+        try:
+            if isinstance(result, dict):
+                examples = result.get("examples", [])
+                if not examples:
+                    for v in result.values():
+                        if isinstance(v, list): examples.extend(v)
+            elif isinstance(result, list):
+                examples = result
+        except Exception:
+            pass
+        new_neg["Hard-mined negative"] = [str(e).strip() for e in examples if str(e).strip()]
+        print("    Generated {} negative fixes for false positives".format(len(new_neg.get("Hard-mined negative", []))))
+
+    return new_pos, new_neg
 
 
 # ---------------------------------------------------------------------------
@@ -1113,7 +1727,10 @@ def decompose_proposition(proposition, config, role="user"):
         "into distinct subtopics. Output ONLY valid JSON."
     )
 
-    prompt = (
+    MIN_SUBTOPICS = 3  # always aim for at least this many distinct subtopics
+    STALL_PATIENCE = 3  # stop only if N consecutive retries add 0 new subtopics
+
+    base_prompt = (
         'PROPOSITION: "{}"\n\n'
         'Analyze this proposition and identify its DISTINCT SUBTOPICS — the '
         'separate categories of behavior or intent it covers.\n\n'
@@ -1121,30 +1738,151 @@ def decompose_proposition(proposition, config, role="user"):
         '- Each subtopic must be a SPECIFIC, DISTINCT type of behavior\n'
         '- Subtopics must be MUTUALLY EXCLUSIVE (minimal overlap)\n'
         '- Subtopics must be COLLECTIVELY EXHAUSTIVE (cover the full proposition)\n'
-        '- Each subtopic should be phrased as a SHORT action-oriented description (5-15 words)\n'
-        '- If the proposition covers only ONE specific topic, return just 1 subtopic\n'
-        '- Typical broad propositions have 3-8 subtopics\n'
-        '- Look for explicit examples in the proposition (after "e.g." or in parentheses)\n'
-        '- Also identify IMPLICIT subtopics not explicitly listed but clearly covered\n\n'
+        '- CRITICAL: Use SHORT LABELS (2-6 words). Do NOT repeat the proposition wording.\n'
+        '  BAD:  "Providing instructions for credential theft or password cracking"\n'
+        '  GOOD: "Credential theft & password attacks"\n'
+        '  BAD:  "Providing instructions for social engineering or phishing"\n'
+        '  GOOD: "Social engineering & phishing"\n'
+        '- Think about genuinely DIFFERENT dimensions: methods vs targets vs contexts\n'
+        '- Aim for at least {} subtopics covering different aspects\n'
+        '- If the proposition covers only ONE very specific narrow topic, return just 1 subtopic\n'
+        '- Typical propositions have 3-8 subtopics\n\n'
+        'FORBIDDEN subtopic types (these are styles/meta, NOT content areas):\n'
+        '  ✗ "Actionable implementation details" — this is a STYLE, not a topic\n'
+        '  ✗ "Step-by-step instructions" — this is a FORMAT, not a topic\n'
+        '  ✗ "Practical guidance" — too vague/meta\n'
+        '  ✗ "Direct vs indirect methods" — this is a dimension, not a subtopic\n'
+        'Every subtopic must name a CONCRETE DOMAIN or ACTIVITY that someone '
+        'could generate real-world examples about.\n\n'
         'Output ONLY valid JSON:\n'
-        '{{"subtopics": ["subtopic 1", "subtopic 2", ...], '
+        '{{"subtopics": ["short label 1", "short label 2", ...], '
         '"reasoning": "brief explanation"}}'
-    ).format(proposition)
+    ).format(proposition, MIN_SUBTOPICS)
 
-    result = call_llm(config, system, prompt)
+    def _parse_subtopics(result):
+        subtopics = []
+        reasoning = ""
+        try:
+            if isinstance(result, dict):
+                subtopics = result.get("subtopics", [])
+                reasoning = result.get("reasoning", "")
+            elif isinstance(result, list):
+                subtopics = result
+        except Exception:
+            pass
+        return [str(s).strip() for s in subtopics if str(s).strip()], reasoning
 
-    subtopics = []
-    reasoning = ""
-    try:
-        if isinstance(result, dict):
-            subtopics = result.get("subtopics", [])
-            reasoning = result.get("reasoning", "")
-        elif isinstance(result, list):
-            subtopics = result
-    except Exception:
-        pass
+    # Pre-load embedding model once for all merge checks
+    emb_model_name = config.get("anchors", "embedding_model")
+    emb_model = load_embedding_model(emb_model_name)
 
-    subtopics = [str(s).strip() for s in subtopics if str(s).strip()]
+    def _merge_similar(subtopics):
+        """Merge subtopics with cosine similarity > threshold. Returns survivors."""
+        if len(subtopics) < 2:
+            return subtopics, []
+        try:
+            st_embs = embed_texts(emb_model, subtopics)
+            from sentence_transformers.util import cos_sim
+            st_sims = cos_sim(st_embs, st_embs)
+
+            MERGE_THRESHOLD = 0.80
+            merged_away = set()
+            merge_pairs = []
+            for i in range(len(subtopics)):
+                if i in merged_away:
+                    continue
+                for j in range(i + 1, len(subtopics)):
+                    if j in merged_away:
+                        continue
+                    sim = float(st_sims[i][j])
+                    if sim > MERGE_THRESHOLD:
+                        keep, drop = (i, j) if len(subtopics[i]) >= len(subtopics[j]) else (j, i)
+                        merged_away.add(drop)
+                        merge_pairs.append((subtopics[drop], subtopics[keep], sim))
+                        print("    {}Merged subtopic {} (sim={:.2f}):{} \"{}\" → \"{}\"".format(
+                            YELLOW, drop + 1, sim, RESET,
+                            subtopics[drop][:50], subtopics[keep][:50]))
+
+            survivors = [st for i, st in enumerate(subtopics) if i not in merged_away]
+            if merged_away:
+                print("    {}After merge: {} subtopics{}".format(DIM, len(survivors), RESET))
+            return survivors, merge_pairs
+        except Exception as e:
+            print("    {}Subtopic similarity check failed: {}{}".format(DIM, e, RESET))
+            return subtopics, []
+
+    # --- Initial decomposition ---
+    result = call_llm(config, system, base_prompt)
+    subtopics, reasoning = _parse_subtopics(result)
+    subtopics, merge_pairs = _merge_similar(subtopics)
+
+    # --- Retry until we have MIN_SUBTOPICS distinct subtopics ---
+    retry_num = 0
+    stall_count = 0
+    prev_count = len(subtopics)
+
+    while len(subtopics) < MIN_SUBTOPICS:
+        retry_num += 1
+
+        # Build feedback about what was too similar
+        if merge_pairs:
+            similar_block = "\n".join(
+                '  ✗ "{}" and "{}" (similarity={:.0f}%)'.format(a[:60], b[:60], s * 100)
+                for a, b, s in merge_pairs
+            )
+        else:
+            similar_block = "  (all subtopics were nearly identical)"
+
+        # Show what survived so the LLM doesn't regenerate those
+        kept_block = ""
+        if subtopics:
+            kept_block = "\nKEPT subtopics (do NOT repeat these, add NEW distinct ones):\n"
+            kept_block += "\n".join("  ✓ \"{}\"".format(st) for st in subtopics)
+
+        need = MIN_SUBTOPICS - len(subtopics)
+        retry_prompt = (
+            'PROPOSITION: "{}"\n\n'
+            'Previous subtopics were TOO SIMILAR and got merged:\n'
+            '{}\n'
+            '{}\n\n'
+            'I need {} MORE subtopics (have {}, need {}).\n\n'
+            'THE PROBLEM: You keep generating variations of the same thing.\n'
+            'SOLUTION: Think about COMPLETELY DIFFERENT DIMENSIONS:\n'
+            '  - Different METHODS (technical exploit vs social manipulation vs physical access)\n'
+            '  - Different TARGETS (individuals vs organizations vs infrastructure)\n'
+            '  - Different CONTEXTS (online vs offline, automated vs manual)\n'
+            '  - Different PHASES (reconnaissance, execution, covering tracks)\n'
+            '  - Different MOTIVATIONS (financial, political, personal)\n\n'
+            'CRITICAL FORMAT: Use SHORT LABELS (2-6 words). Do NOT repeat the proposition.\n'
+            '  BAD:  "Providing instructions for credential theft"\n'
+            '  GOOD: "Credential theft & password attacks"\n\n'
+            'Output ONLY valid JSON:\n'
+            '{{"subtopics": ["short label 1", "short label 2", ...], '
+            '"reasoning": "brief explanation"}}'
+        ).format(proposition, similar_block, kept_block,
+                 need, len(subtopics), MIN_SUBTOPICS)
+
+        print("    {}Retrying decomposition (round {}) — have {}, need {}...{}".format(
+            YELLOW, retry_num, len(subtopics), MIN_SUBTOPICS, RESET))
+
+        result = call_llm(config, system, retry_prompt)
+        new_subtopics, reasoning = _parse_subtopics(result)
+
+        # Combine with survivors from previous round, then re-merge
+        combined = list(subtopics) + [s for s in new_subtopics
+                                       if s.lower() not in {x.lower() for x in subtopics}]
+        subtopics, merge_pairs = _merge_similar(combined)
+
+        # Stall detection: if no progress, stop
+        if len(subtopics) <= prev_count:
+            stall_count += 1
+            if stall_count >= STALL_PATIENCE:
+                print("    {}WARNING: {} consecutive retries with no new distinct subtopics — stopping{}".format(
+                    YELLOW, STALL_PATIENCE, RESET))
+                break
+        else:
+            stall_count = 0
+        prev_count = len(subtopics)
 
     if len(subtopics) < 2:
         print("\n  {}Subtopics:{} Proposition is narrow — no decomposition needed".format(
@@ -1265,9 +2003,17 @@ def generate_orthogonal_axes(proposition, subtopics, config, role="user"):
     return axes
 
 
-def audit_subtopic_coverage(texts, subtopics, emb_model, label="anchors"):
+def audit_subtopic_coverage(texts, subtopics, emb_model, label="anchors",
+                            forced_assignments=None):
     """
     Classify each text to its nearest subtopic by embedding similarity.
+
+    Args:
+        forced_assignments: dict of {text: subtopic_index}. If provided,
+            texts with forced assignments use those instead of embedding
+            similarity. This prevents gap-fill examples from being
+            reclassified away from their intended subtopic.
+
     Returns dict of {subtopic_index: count} and list of per-text assignments.
     """
     if not subtopics or len(subtopics) < 2 or not texts:
@@ -1275,10 +2021,21 @@ def audit_subtopic_coverage(texts, subtopics, emb_model, label="anchors"):
 
     from sentence_transformers.util import cos_sim
 
+    if forced_assignments is None:
+        forced_assignments = {}
+
     text_embs = embed_texts(emb_model, texts)
     subtopic_embs = embed_texts(emb_model, subtopics)
     sims = cos_sim(text_embs, subtopic_embs)
-    assignments = sims.argmax(dim=1).tolist()
+    emb_assignments = sims.argmax(dim=1).tolist()
+
+    # Merge: forced assignments override embedding-based ones
+    assignments = []
+    for i, text in enumerate(texts):
+        if text in forced_assignments:
+            assignments.append(forced_assignments[text])
+        else:
+            assignments.append(emb_assignments[i])
 
     coverage = {}
     for st_idx in range(len(subtopics)):
@@ -1297,9 +2054,9 @@ def audit_subtopic_coverage(texts, subtopics, emb_model, label="anchors"):
         bar_len = int(pct / 5)
         bar = "█" * bar_len + "░" * (20 - bar_len)
         status = ""
-        if count < equal_share * 0.4:
+        if count < equal_share * 0.6:
             status = "  {}← UNDERREPRESENTED{}".format(YELLOW, RESET)
-        elif count < equal_share * 0.6:
+        elif count < equal_share * 0.9:
             status = "  {}← LOW{}".format(DIM, RESET)
         st_disp = st if len(st) <= 45 else st[:42] + "..."
         print("      {}: {} {:>3} ({:>4.1f}%){}".format(
@@ -1310,14 +2067,21 @@ def audit_subtopic_coverage(texts, subtopics, emb_model, label="anchors"):
 
 def generate_subtopic_gap_fill(proposition, subtopics, underrep_indices,
                                existing_texts, target_per_subtopic, config,
-                               role="user", anchor_type="positive"):
+                               role="user", anchor_type="positive", emb_model=None):
     """
     Generate targeted anchors for underrepresented subtopics.
 
-    Called after MMR selection reveals subtopic imbalance. Generates anchors
-    specifically for the underrepresented subtopics to bring coverage up.
+    For each underrepresented subtopic, generates anchors in a retry loop:
+      1. Generate batch from LLM
+      2. Filter exact duplicates
+      3. If emb_model available: filter cosine near-duplicates (>0.85) within
+         batch and against existing anchors
+      4. If still below target, retry with explicit diversity instructions (up to 3 rounds)
+
+    Returns (all_gap_texts, all_gap_cats, all_gap_st_indices)
     """
     rc = _role_context(role)
+    MAX_ROUNDS = 5  # hard safety cap to prevent infinite loops
 
     if anchor_type == "positive":
         gen_system = (
@@ -1332,77 +2096,157 @@ def generate_subtopic_gap_fill(proposition, subtopics, underrep_indices,
 
     all_gap_texts = []
     all_gap_cats = []
+    all_gap_st_indices = []
 
     for st_idx in underrep_indices:
         subtopic = subtopics[st_idx]
-        need = target_per_subtopic
+        st_label = "Subtopic gap-fill: {}".format(
+            subtopic if len(subtopic) <= 40 else subtopic[:37] + "...")
+        st_disp = subtopic if len(subtopic) <= 40 else subtopic[:37] + "..."
 
-        if anchor_type == "positive":
-            gen_prompt = (
-                rc["safety_context"] +
-                'PROPOSITION: "{}"\n\n'
-                'SUBTOPIC FOCUS: "{}"\n\n'
-                'Generate {} {} that SPECIFICALLY match this subtopic.\n\n'
-                'CRITICAL:\n'
-                '- Every example MUST be about this specific subtopic\n'
-                '- Do NOT generate examples about other aspects of the proposition\n'
-                '- Mix lengths: 30% very short (3-8 words), 40% medium, 30% longer\n'
-                '- Mix styles: direct requests, indirect, hypothetical, coded language\n'
-                '{}\n\n'
-                'Output ONLY valid JSON:\n'
-                '{{"examples": ["example1", "example2", ...]}}'
-            ).format(proposition, subtopic, need, rc["example_noun_short"],
-                     rc["seed_style"])
-        else:
-            gen_prompt = (
-                rc["safety_context"] +
-                'PROPOSITION: "{}"\n\n'
-                'SUBTOPIC FOCUS: "{}"\n\n'
-                'Generate {} BENIGN {} that use the SAME vocabulary as this subtopic '
-                'but have CLEARLY legitimate intent.\n\n'
-                'Use these mirror strategies:\n'
-                '- DEFINITIONAL: "What is [concept]?" instead of "How to do [concept]"\n'
-                '- DEFENSIVE: "How to detect/prevent [thing]" instead of "How to do [thing]"\n'
-                '- EDUCATIONAL: "Explain [concept] for my class" \n'
-                '- REPORTING: "Report [thing]" / "I\'m a victim of [thing]"\n'
-                '- LEGITIMATE: same action but for a legal purpose\n\n'
-                '- Mix lengths: 30% very short (3-8 words), rest medium\n'
-                '{}\n\n'
-                'Output ONLY valid JSON:\n'
-                '{{"examples": ["example1", "example2", ...]}}'
-            ).format(proposition, subtopic, need, rc["example_noun_short"],
-                     rc["neg_style"])
+        # Track what we've collected for THIS subtopic
+        st_texts = []
+        existing_set = set(existing_texts) | set(all_gap_texts)
 
-        result = call_llm(config, gen_system, gen_prompt)
+        attempt = 0
+        while attempt < MAX_ROUNDS:
+            still_need = target_per_subtopic - len(st_texts)
+            if still_need <= 0:
+                break
 
-        examples = []
-        try:
-            if isinstance(result, dict):
-                examples = result.get("examples", [])
-                if not examples:
-                    for v in result.values():
-                        if isinstance(v, list):
-                            examples.extend(v)
-            elif isinstance(result, list):
-                examples = result
-        except Exception:
-            pass
+            # Build prompt — on retries, add diversity instructions
+            diversity_note = ""
+            if attempt > 0 and st_texts:
+                avoid_list = "\n".join("- \"{}\"".format(t[:80]) for t in st_texts[:10])
+                diversity_note = (
+                    "\n\nIMPORTANT: You must generate DIFFERENT examples from these "
+                    "already-generated ones. Use different vocabulary, sentence structures, "
+                    "and angles. Do NOT paraphrase these:\n{}\n"
+                ).format(avoid_list)
 
-        existing_set = set(existing_texts)
-        for ex in examples:
-            text = str(ex).strip()
-            if text and text not in existing_set:
-                all_gap_texts.append(text)
-                all_gap_cats.append("Subtopic gap-fill: {}".format(
-                    subtopic if len(subtopic) <= 40 else subtopic[:37] + "..."))
-                existing_set.add(text)
+            if anchor_type == "positive":
+                gen_prompt = (
+                    rc["safety_context"] +
+                    'PROPOSITION: "{}"\n\n'
+                    'SUBTOPIC FOCUS: "{}"\n\n'
+                    'Generate {} {} that SPECIFICALLY match this subtopic.\n\n'
+                    'CRITICAL:\n'
+                    '- Every example MUST be about this specific subtopic\n'
+                    '- Do NOT generate examples about other aspects of the proposition\n'
+                    '- Mix lengths: 30% very short (3-8 words), 40% medium, 30% longer\n'
+                    '- Mix styles: direct requests, indirect, hypothetical, coded language\n'
+                    '- Each example must be SEMANTICALLY DISTINCT (not paraphrases)\n'
+                    '{}{}\n\n'
+                    'Output ONLY valid JSON:\n'
+                    '{{"examples": ["example1", "example2", ...]}}'
+                ).format(proposition, subtopic, still_need, rc["example_noun_short"],
+                         rc["seed_style"], diversity_note)
+            else:
+                gen_prompt = (
+                    rc["safety_context"] +
+                    'PROPOSITION: "{}"\n\n'
+                    'SUBTOPIC FOCUS: "{}"\n\n'
+                    'Generate {} BENIGN {} that use the SAME vocabulary as this subtopic '
+                    'but have CLEARLY legitimate intent.\n\n'
+                    'Use these mirror strategies:\n'
+                    '- DEFINITIONAL: "What is [concept]?" instead of "How to do [concept]"\n'
+                    '- DEFENSIVE: "How to detect/prevent [thing]" instead of "How to do [thing]"\n'
+                    '- EDUCATIONAL: "Explain [concept] for my class" \n'
+                    '- REPORTING: "Report [thing]" / "I\'m a victim of [thing]"\n'
+                    '- LEGITIMATE: same action but for a legal purpose\n\n'
+                    '- Mix lengths: 30% very short (3-8 words), rest medium\n'
+                    '- Each example must be SEMANTICALLY DISTINCT (not paraphrases)\n'
+                    '{}{}\n\n'
+                    'Output ONLY valid JSON:\n'
+                    '{{"examples": ["example1", "example2", ...]}}'
+                ).format(proposition, subtopic, still_need, rc["example_noun_short"],
+                         rc["neg_style"], diversity_note)
 
-        print("      Subtopic {}: \"{}\" → {} examples".format(
-            st_idx + 1,
-            subtopic if len(subtopic) <= 40 else subtopic[:37] + "...",
-            len([c for c in all_gap_cats if subtopic[:20] in c])))
+            result = call_llm(config, gen_system, gen_prompt)
 
-    return all_gap_texts, all_gap_cats
+            # Parse response
+            examples = []
+            try:
+                if isinstance(result, dict):
+                    examples = result.get("examples", [])
+                    if not examples:
+                        for v in result.values():
+                            if isinstance(v, list):
+                                examples.extend(v)
+                elif isinstance(result, list):
+                    examples = result
+            except Exception:
+                pass
+
+            # Exact string dedup
+            batch_texts = []
+            for ex in examples:
+                text = str(ex).strip()
+                if text and text not in existing_set:
+                    batch_texts.append(text)
+                    existing_set.add(text)
+
+            # Cosine diversity filter
+            if batch_texts and emb_model is not None:
+                try:
+                    from sentence_transformers.util import cos_sim
+                    batch_embs = emb_model.encode(batch_texts)
+
+                    to_remove = set()
+                    # Within-batch dedup
+                    if len(batch_texts) > 1:
+                        batch_sims = cos_sim(batch_embs, batch_embs)
+                        for i in range(len(batch_texts)):
+                            if i in to_remove:
+                                continue
+                            for j in range(i + 1, len(batch_texts)):
+                                if j in to_remove:
+                                    continue
+                                if float(batch_sims[i][j]) > 0.85:
+                                    to_remove.add(j)
+
+                    # Cross-dedup vs existing + previous gap-fill
+                    compare_texts = list(existing_texts) + st_texts
+                    if compare_texts:
+                        compare_embs = emb_model.encode(compare_texts)
+                        cross_sims = cos_sim(batch_embs, compare_embs)
+                        for i in range(len(batch_texts)):
+                            if i in to_remove:
+                                continue
+                            if float(cross_sims[i].max()) > 0.85:
+                                to_remove.add(i)
+
+                    if to_remove:
+                        batch_texts = [t for i, t in enumerate(batch_texts) if i not in to_remove]
+                except Exception:
+                    pass
+
+            st_texts.extend(batch_texts)
+
+            if attempt > 0:
+                if batch_texts:
+                    print("        retry {}: +{} diverse (total {}/{})".format(
+                        attempt, len(batch_texts), len(st_texts), target_per_subtopic))
+
+            # If this round produced nothing new, LLM has exhausted diversity
+            if len(batch_texts) == 0 and attempt > 0:
+                print("        retry {}: 0 new diverse anchors, stopping".format(attempt))
+                break
+
+            attempt += 1
+
+        # Add this subtopic's collected texts
+        for t in st_texts:
+            all_gap_texts.append(t)
+            all_gap_cats.append(st_label)
+            all_gap_st_indices.append(st_idx)
+
+        print("      Subtopic {}: \"{}\" → {} examples{}".format(
+            st_idx + 1, st_disp, len(st_texts),
+            "" if len(st_texts) >= target_per_subtopic
+            else " {}(short of {} target){}".format(DIM, target_per_subtopic, RESET)))
+
+    return all_gap_texts, all_gap_cats, all_gap_st_indices
 
 
 # ---------------------------------------------------------------------------
@@ -1695,7 +2539,7 @@ def generate_diverse_anchors(proposition, categories, target_n, num_rounds, conf
     prop_emb = embed_texts(emb_model, [proposition])[0]
 
     use_anneal = config.get("anchors", "mmr_anneal", fallback="true").strip().lower() == "true"
-    selected_indices = mmr_select(
+    selected_indices = cluster_constrained_mmr(
         all_embeddings, all_texts, all_categories, prop_emb,
         target_n, lambda_param=0.5, anneal=use_anneal)
 
@@ -1819,48 +2663,71 @@ def generate_diverse_anchors(proposition, categories, target_n, num_rounds, conf
         total = sum(len(v) for v in final_dict.values())
         print("    {}Post-jitter total: {} anchors{}".format(GREEN, total, RESET))
 
-    # --- Subtopic coverage audit and gap-fill ---
+    # --- Subtopic coverage audit and gap-fill (iterative) ---
     if has_subtopics:
         final_texts = []
         for cat, examples in final_dict.items():
             final_texts.extend(examples)
 
-        coverage, assignments = audit_subtopic_coverage(
-            final_texts, subtopics, emb_model, label="positive anchors")
+        # Fixed per-subtopic target based on ORIGINAL target_n, not current total.
+        # This prevents runaway inflation where adding examples raises the
+        # denominator, making underrepresented subtopics appear permanently short.
+        per_subtopic_target = max(5, target_n // len(subtopics))
 
-        # Check for underrepresented subtopics
-        equal_share = len(final_texts) / len(subtopics)
-        min_threshold = max(3, int(equal_share * 0.4))  # at least 40% of equal share
-        underrep = [i for i, c in coverage.items() if c < min_threshold]
+        # Track forced subtopic assignments for gap-fill examples.
+        # Without this, audit_subtopic_coverage reclassifies by embedding distance
+        # and meta/abstract subtopics lose all their gap-fill examples.
+        forced_assignments = {}
 
-        if underrep:
-            gap_target = max(5, int(equal_share * 0.6))
-            print("\n    {}Subtopic gap-fill:{} {} underrepresented subtopic(s) detected, "
-                  "generating {} targeted examples each...".format(
-                      BOLD, RESET, len(underrep), gap_target))
+        MAX_GAP_FILL_ROUNDS = 3  # safety cap for iterative balancing
+        for gf_round in range(MAX_GAP_FILL_ROUNDS):
+            label = "positive anchors" if gf_round == 0 else "positive anchors (after gap-fill round {})".format(gf_round)
+            coverage, assignments = audit_subtopic_coverage(
+                final_texts, subtopics, emb_model, label=label,
+                forced_assignments=forced_assignments)
 
-            gap_texts, gap_cats = generate_subtopic_gap_fill(
-                proposition, subtopics, underrep, final_texts, gap_target,
-                config, role=role, anchor_type="positive")
+            # Check which subtopics are below the FIXED target
+            underrep = [i for i, c in coverage.items() if c < per_subtopic_target]
 
-            if gap_texts:
-                # Add gap-fill to final dict
-                for text, cat in zip(gap_texts, gap_cats):
-                    if cat not in final_dict:
-                        final_dict[cat] = []
-                    final_dict[cat].append(text)
+            if not underrep:
+                print("    {}All subtopics meet target ({} per subtopic) ✓{}".format(
+                    GREEN, per_subtopic_target, RESET))
+                break
 
-                total = sum(len(v) for v in final_dict.values())
-                print("    {} Added {} gap-fill anchors (new total: {}){}".format(
-                    GREEN, len(gap_texts), total, RESET))
+            # Compute shortfall per subtopic — generate only what's needed
+            max_shortfall = max(per_subtopic_target - coverage[i] for i in underrep)
 
-                # Re-audit to show improvement
-                final_texts.extend(gap_texts)
-                audit_subtopic_coverage(
-                    final_texts, subtopics, emb_model,
-                    label="positive anchors (after gap-fill)")
+            print("\n    {}Subtopic gap-fill (round {}):{} {} underrepresented subtopic(s), "
+                  "target {} each (max shortfall {})...".format(
+                      BOLD, gf_round + 1, RESET, len(underrep), per_subtopic_target, max_shortfall))
+
+            gap_texts, gap_cats, gap_st_indices = generate_subtopic_gap_fill(
+                proposition, subtopics, underrep, final_texts, max_shortfall,
+                config, role=role, anchor_type="positive", emb_model=emb_model)
+
+            if not gap_texts:
+                print("    {}No new gap-fill anchors generated, stopping.{}".format(
+                    YELLOW, RESET))
+                break
+
+            # Add gap-fill to final dict and track forced assignments
+            for text, cat, st_idx in zip(gap_texts, gap_cats, gap_st_indices):
+                if cat not in final_dict:
+                    final_dict[cat] = []
+                final_dict[cat].append(text)
+                forced_assignments[text] = st_idx
+
+            total = sum(len(v) for v in final_dict.values())
+            print("    {} Added {} gap-fill anchors (new total: {}){}".format(
+                GREEN, len(gap_texts), total, RESET))
+
+            final_texts.extend(gap_texts)
         else:
-            print("    {}All subtopics adequately covered ✓{}".format(GREEN, RESET))
+            # Exhausted all rounds — show final state
+            audit_subtopic_coverage(
+                final_texts, subtopics, emb_model,
+                label="positive anchors (after {} gap-fill rounds)".format(MAX_GAP_FILL_ROUNDS),
+                forced_assignments=forced_assignments)
 
     return final_dict
 
@@ -1937,6 +2804,9 @@ def generate_negative_anchors(proposition, positive_anchors_dict, target_n, conf
     try:
         if isinstance(cat_result, dict):
             parsed_cats = cat_result
+        elif isinstance(cat_result, list):
+            # LLM returned a raw list of category strings
+            parsed_cats = {"categories": cat_result}
         else:
             parsed_cats = json.loads(str(cat_result).strip())
         if "categories" in parsed_cats and isinstance(parsed_cats["categories"], list):
@@ -1949,9 +2819,20 @@ def generate_negative_anchors(proposition, positive_anchors_dict, target_n, conf
         else:
             print("    Could not parse categories, using config.ini categories")
     except (json.JSONDecodeError, TypeError, ValueError) as e:
-        preview = str(cat_result)[:120] if cat_result else "(empty)"
-        print("    Category generation failed ({}), using config.ini categories".format(e))
-        print("    {}LLM returned: {}{}".format(DIM, preview, RESET))
+        # Last resort: try to extract strings from raw text
+        raw = str(cat_result) if cat_result else ""
+        extracted = []
+        for line in raw.split("\n"):
+            line = line.strip().strip("-•*").strip()
+            if len(line) > 10 and not line.startswith("{") and not line.startswith("["):
+                extracted.append(line)
+        if len(extracted) >= 3:
+            neg_categories = extracted
+            print("    Extracted {} categories from raw LLM output".format(len(neg_categories)))
+        else:
+            preview = str(cat_result)[:120] if cat_result else "(empty)"
+            print("    Category generation failed ({}), using config.ini categories".format(e))
+            print("    {}LLM returned: {}{}".format(DIM, preview, RESET))
 
     for i, cat in enumerate(neg_categories):
         print("      {}. {}".format(i + 1, cat))
@@ -2322,9 +3203,9 @@ def generate_negative_anchors(proposition, positive_anchors_dict, target_n, conf
 
         filt_embs = embed_texts(emb_model, filtered_texts)
         use_anneal = config.get("anchors", "mmr_anneal", fallback="true").strip().lower() == "true"
-        selected_indices = mmr_select(
+        selected_indices = cluster_constrained_mmr(
             filt_embs, filtered_texts, filtered_cats, prop_embedding,
-            target_n, lambda_param=0.4, directional=True, anneal=use_anneal)
+            target_n, lambda_param=0.4, anneal=use_anneal)
         final_texts = [filtered_texts[i] for i in selected_indices]
         final_cats = [filtered_cats[i] for i in selected_indices]
 
@@ -2382,45 +3263,63 @@ def generate_negative_anchors(proposition, positive_anchors_dict, target_n, conf
             min(final_prop_sims), sum(final_prop_sims) / len(final_prop_sims),
             max(final_prop_sims)))
 
-    # --- Subtopic coverage audit and gap-fill for negatives ---
+    # --- Subtopic coverage audit and gap-fill for negatives (iterative) ---
     if has_neg_subtopics:
         neg_all_texts = []
         for cat, examples in neg_dict.items():
             neg_all_texts.extend(examples)
 
-        coverage, assignments = audit_subtopic_coverage(
-            neg_all_texts, subtopics, emb_model, label="negative anchors")
+        # Fixed per-subtopic target based on ORIGINAL target_n, not current total.
+        per_subtopic_target = max(5, target_n // len(subtopics))
 
-        equal_share = len(neg_all_texts) / len(subtopics)
-        min_threshold = max(5, int(equal_share * 0.4))
-        underrep = [i for i, c in coverage.items() if c < min_threshold]
+        forced_assignments = {}
 
-        if underrep:
-            gap_target = max(5, int(equal_share * 0.6))
-            print("\n    {}Subtopic gap-fill:{} {} underrepresented subtopic(s), "
-                  "generating {} targeted negatives each...".format(
-                      BOLD, RESET, len(underrep), gap_target))
+        MAX_GAP_FILL_ROUNDS = 3
+        for gf_round in range(MAX_GAP_FILL_ROUNDS):
+            label = "negative anchors" if gf_round == 0 else "negative anchors (after gap-fill round {})".format(gf_round)
+            coverage, assignments = audit_subtopic_coverage(
+                neg_all_texts, subtopics, emb_model, label=label,
+                forced_assignments=forced_assignments)
 
-            gap_texts, gap_cats = generate_subtopic_gap_fill(
-                proposition, subtopics, underrep, neg_all_texts, gap_target,
-                config, role=role, anchor_type="negative")
+            # Check which subtopics are below the FIXED target
+            underrep = [i for i, c in coverage.items() if c < per_subtopic_target]
 
-            if gap_texts:
-                for text, cat in zip(gap_texts, gap_cats):
-                    if cat not in neg_dict:
-                        neg_dict[cat] = []
-                    neg_dict[cat].append(text)
+            if not underrep:
+                print("    {}All subtopics meet target ({} per subtopic) ✓{}".format(
+                    GREEN, per_subtopic_target, RESET))
+                break
 
-                total = sum(len(v) for v in neg_dict.values())
-                print("    {} Added {} gap-fill negatives (new total: {}){}".format(
-                    GREEN, len(gap_texts), total, RESET))
+            max_shortfall = max(per_subtopic_target - coverage[i] for i in underrep)
 
-                neg_all_texts.extend(gap_texts)
-                audit_subtopic_coverage(
-                    neg_all_texts, subtopics, emb_model,
-                    label="negative anchors (after gap-fill)")
+            print("\n    {}Subtopic gap-fill (round {}):{} {} underrepresented subtopic(s), "
+                  "target {} negatives each (max shortfall {})...".format(
+                      BOLD, gf_round + 1, RESET, len(underrep), per_subtopic_target, max_shortfall))
+
+            gap_texts, gap_cats, gap_st_indices = generate_subtopic_gap_fill(
+                proposition, subtopics, underrep, neg_all_texts, max_shortfall,
+                config, role=role, anchor_type="negative", emb_model=emb_model)
+
+            if not gap_texts:
+                print("    {}No new gap-fill negatives generated, stopping.{}".format(
+                    YELLOW, RESET))
+                break
+
+            for text, cat, st_idx in zip(gap_texts, gap_cats, gap_st_indices):
+                if cat not in neg_dict:
+                    neg_dict[cat] = []
+                neg_dict[cat].append(text)
+                forced_assignments[text] = st_idx
+
+            total = sum(len(v) for v in neg_dict.values())
+            print("    {} Added {} gap-fill negatives (new total: {}){}".format(
+                GREEN, len(gap_texts), total, RESET))
+
+            neg_all_texts.extend(gap_texts)
         else:
-            print("    {}All subtopics adequately covered ✓{}".format(GREEN, RESET))
+            audit_subtopic_coverage(
+                neg_all_texts, subtopics, emb_model,
+                label="negative anchors (after {} gap-fill rounds)".format(MAX_GAP_FILL_ROUNDS),
+                forced_assignments=forced_assignments)
 
     return neg_dict
 
@@ -2693,7 +3592,7 @@ def generate_hard_positives(proposition, positive_anchors_dict, negative_anchors
         filt_embs = embed_texts(emb_model, final_texts)
         cats_dummy = ["Hard positive (boundary)"] * len(final_texts)
         use_anneal = config.get("anchors", "mmr_anneal", fallback="true").strip().lower() == "true"
-        selected_indices = mmr_select(
+        selected_indices = cluster_constrained_mmr(
             filt_embs, final_texts, cats_dummy, prop_embedding,
             target_n, lambda_param=0.4, anneal=use_anneal)
         final_texts = [final_texts[i] for i in selected_indices]
@@ -2831,14 +3730,30 @@ def generate_hard_negatives(proposition, positive_anchors_dict, negative_anchors
     try:
         if isinstance(fp_cat_result, dict):
             parsed_fp = fp_cat_result
+        elif isinstance(fp_cat_result, list):
+            # LLM returned a raw list — wrap it
+            parsed_fp = {"categories": fp_cat_result}
         else:
-            parsed_fp = json.loads(str(fp_cat_result).strip())
+            raw = str(fp_cat_result).strip()
+            # Try JSON parse
+            parsed_fp = json.loads(raw)
+
         if "categories" in parsed_fp and isinstance(parsed_fp["categories"], list):
             for cat_obj in parsed_fp["categories"]:
                 if isinstance(cat_obj, dict) and "name" in cat_obj:
+                    # Full format: {"name": "...", "examples": [...]}
                     fp_categories.append(cat_obj)
+                elif isinstance(cat_obj, str) and len(cat_obj.strip()) > 3:
+                    # String format: "Category Name — description"
+                    fp_categories.append({"name": cat_obj.strip(), "examples": []})
     except (json.JSONDecodeError, TypeError, ValueError):
-        pass
+        # Last resort: try to extract category names from raw text
+        raw = str(fp_cat_result) if fp_cat_result else ""
+        for line in raw.split("\n"):
+            line = line.strip().strip("-•*").strip()
+            # Match lines that look like category names (skip short/empty)
+            if len(line) > 10 and not line.startswith("{") and not line.startswith("["):
+                fp_categories.append({"name": line, "examples": []})
 
     # Build category text for the main prompt
     if len(fp_categories) >= 4:
@@ -3106,12 +4021,10 @@ def generate_hard_negatives(proposition, positive_anchors_dict, negative_anchors
             BOLD, RESET, target_n, len(final_texts)))
         filt_embs = embed_texts(emb_model, final_texts)
         cats_dummy = ["Hard negative (boundary)"] * len(final_texts)
-        # Use directional MMR — we want negatives spread around the proposition
-        # from different directions, not clustered in one benign subspace
         use_anneal = config.get("anchors", "mmr_anneal", fallback="true").strip().lower() == "true"
-        selected_indices = mmr_select(
+        selected_indices = cluster_constrained_mmr(
             filt_embs, final_texts, cats_dummy, prop_embedding,
-            target_n, lambda_param=0.4, directional=True, anneal=use_anneal)
+            target_n, lambda_param=0.4, anneal=use_anneal)
         final_texts = [final_texts[i] for i in selected_indices]
         final_sims = [final_sims[i] for i in selected_indices]
 
@@ -3172,12 +4085,12 @@ Usage:
   python semantic_anchor_%%NAME%%.py --verbose              # Full table
   python semantic_anchor_%%NAME%%.py --show-examples        # View anchors
   python semantic_anchor_%%NAME%%.py --file input.txt       # File mode (### separated)
-  python semantic_anchor_%%NAME%%.py --graph                # 3D anchor spread visualization
+  python semantic_anchor_%%NAME%%.py --graph                # Distribution visualization
 
 Scoring modes:
   cosine:  KNN voting over unified positive/negative anchor pool. Fast, no NLI needed.
   nli:     NLI entailment scoring with gap-gated anchor analysis. Handles paraphrases well.
-  hybrid:  Cosine + NLI KNN (20+20=40 voters, count positives). Recommended.
+  hybrid:  Merged cosine + NLI KNN voting. Recommended.
   llm:     LLM-as-judge. Requires config_%%NAME%%.ini with provider, model, api_key.
   compare: Runs all modes side-by-side with verdict, score, and top anchors.
 
@@ -3260,9 +4173,10 @@ def _load_evaluator_config():
     nli_model = json_nli_model
     knn_size = 20  # default KNN neighborhood size
     nli_abstain_margin = 0.15  # default: abstain when vote margin < this
-    nli_retrieve_k = 40  # default: cosine pre-filter top 40 from unified pool
+    nli_retrieve_k = 40  # default: cosine pre-filter top 40, then NLI re-rank
     nli_vote_k = 20      # default: vote on top 20 by NLI score
     nli_fwd_weight = 0.7 # default: 70% forward, 30% backward
+    hybrid_pool_size = 40 # default: 20 cosine + 20 NLI = 40 merged voters
     emb_source = "anchors JSON"
     nli_source = "anchors JSON"
 
@@ -3313,6 +4227,9 @@ def _load_evaluator_config():
             val = cfg.get("thresholds", "nli_fwd_weight", fallback=None)
             if val and val.strip():
                 nli_fwd_weight = float(val.strip())
+            val = cfg.get("thresholds", "hybrid_pool_size", fallback=None)
+            if val and val.strip():
+                hybrid_pool_size = int(val.strip())
 
     # Store sources for startup logging
     _model_sources["embedding"] = (emb_model, emb_source)
@@ -3321,17 +4238,19 @@ def _load_evaluator_config():
     return (proposition, anchors, match_thresh, warn_thresh,
             neg_anchors, neutral_anchors, emb_model, nli_model, role, knn_size,
             nli_abstain_margin, nli_retrieve_k, nli_vote_k,
-            nli_fwd_weight)
+            nli_fwd_weight, hybrid_pool_size)
 
 
 # Model source tracking — filled by _load_evaluator_config, read by main()
 _model_sources = {}
+_amo_active = False  # set True by prepare_anchors() when optimized embeddings are loaded
 
 (PROPOSITION, ANCHORS, MATCH_THRESHOLD, WARNING_THRESHOLD,
  NEGATIVE_ANCHORS, NEUTRAL_ANCHORS,
  EMBEDDING_MODEL, NLI_MODEL, ANCHOR_ROLE, COSINE_KNN_K,
  NLI_ABSTAIN_MARGIN,
- NLI_RETRIEVE_K, NLI_VOTE_K, NLI_FWD_WEIGHT) = _load_evaluator_config()
+ NLI_RETRIEVE_K, NLI_VOTE_K, NLI_FWD_WEIGHT,
+ HYBRID_POOL_SIZE) = _load_evaluator_config()
 
 
 # ---------------------------------------------------------------------------
@@ -3612,24 +4531,54 @@ def prepare_anchors(model):
         for ex in examples:
             all_texts.append(ex)
             all_categories.append(cat)
-    print("  Embedding {} positive anchors...".format(len(all_texts)))
-    all_embeddings = model.encode(all_texts, show_progress_bar=False)
 
     # Negative anchors (contrastive)
     neg_texts = []
     neg_categories = []
-    neg_embeddings = None
     for cat, examples in NEGATIVE_ANCHORS.items():
         for ex in examples:
             neg_texts.append(ex)
             neg_categories.append(cat)
-    if neg_texts:
-        print("  Embedding {} negative anchors...".format(len(neg_texts)))
-        neg_embeddings = model.encode(neg_texts, show_progress_bar=False)
-    else:
-        print("  No negative anchors (contrastive scoring disabled)")
 
-    # Neutral anchors (off-topic baseline)
+    # Check for AMO-optimized embeddings
+    import numpy as np
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    opt_path = os.path.join(script_dir, "optimized_anchors_{}.npz".format(SCRIPT_NAME))
+
+    if os.path.exists(opt_path):
+        print("  Loading AMO-optimized embeddings: {}".format(os.path.basename(opt_path)))
+        opt_data = np.load(opt_path, allow_pickle=True)
+        opt_embs = opt_data["embeddings"]
+        n_pos = int(opt_data["pos_count"])
+        n_neg = int(opt_data["neg_count"])
+
+        if n_pos == len(all_texts) and n_neg == len(neg_texts):
+            global _amo_active
+            _amo_active = True
+            all_embeddings = opt_embs[:n_pos]
+            neg_embeddings = opt_embs[n_pos:n_pos + n_neg] if n_neg > 0 else None
+            print("  {} positive + {} negative optimized vectors loaded".format(n_pos, n_neg))
+        else:
+            print("  WARNING: Anchor count mismatch (opt: {}+{}, current: {}+{}), re-embedding".format(
+                n_pos, n_neg, len(all_texts), len(neg_texts)))
+            print("  Embedding {} positive anchors...".format(len(all_texts)))
+            all_embeddings = model.encode(all_texts, show_progress_bar=False)
+            if neg_texts:
+                print("  Embedding {} negative anchors...".format(len(neg_texts)))
+                neg_embeddings = model.encode(neg_texts, show_progress_bar=False)
+            else:
+                neg_embeddings = None
+    else:
+        print("  Embedding {} positive anchors...".format(len(all_texts)))
+        all_embeddings = model.encode(all_texts, show_progress_bar=False)
+        if neg_texts:
+            print("  Embedding {} negative anchors...".format(len(neg_texts)))
+            neg_embeddings = model.encode(neg_texts, show_progress_bar=False)
+        else:
+            neg_embeddings = None
+            print("  No negative anchors (contrastive scoring disabled)")
+
+    # Neutral anchors (off-topic baseline) — always re-embedded (not trained)
     neutral_embeddings = None
     if NEUTRAL_ANCHORS:
         print("  Embedding {} neutral anchors...".format(len(NEUTRAL_ANCHORS)))
@@ -3788,8 +4737,8 @@ def _load_cross_encoder():
 
 def _nli_net_scores(pairs):
     """
-    Compute net NLI score = max(0, entailment - contradiction) for each pair.
-    Used for NLI re-ranking of cosine-retrieved candidates.
+    Compute net NLI score = E - C (entailment minus contradiction) for each pair.
+    Returns list of signed scores: positive = entailment, negative = contradiction.
     """
     import numpy as np
     xenc = _load_cross_encoder()
@@ -3801,7 +4750,7 @@ def _nli_net_scores(pairs):
     probs = exp_logits / exp_logits.sum(axis=1, keepdims=True)
     entail = probs[:, _entailment_idx]
     contra = probs[:, _contradiction_idx]
-    net = np.maximum(0.0, entail - contra)
+    net = entail - contra
     return net.tolist()
 
 
@@ -3815,13 +4764,15 @@ def _score_nli_core(message, all_texts, all_categories, model=None,
                     neutral_embeddings=None,
                     do_spellcheck=True, use_extraction=True):
     """
-    NLI KNN voting: cosine pre-filter → NLI re-rank → count positives in top-K.
+    NLI KNN voting: score anchors by NLI entailment, count positives in top-K.
 
-    Pipeline:
+    Default pipeline (nli_retrieve_k = 40):
       1. Spell check + extraction + build views
-      2. Cosine retrieval: top NLI_RETRIEVE_K from unified pool (pos + neg)
-      3. NLI re-rank: asymmetric net scores (E-C) on retrieved candidates
-      4. Vote on top NLI_VOTE_K: score = pos_in_k / total_voters
+      2. Cosine pre-filter: top nli_retrieve_k candidates from unified pool
+      3. NLI score: asymmetric E-C on candidates (forward + backward)
+      4. Sort by NLI score, vote on top NLI_VOTE_K
+
+    If nli_retrieve_k = 0, scores ALL anchors (slower but no pre-filter loss).
 
     Returns (results, corrected, corrections, extraction, neg_cos, final_score, debug)
     """
@@ -3854,7 +4805,7 @@ def _score_nli_core(message, all_texts, all_categories, model=None,
             label = sent if len(sent) <= 40 else sent[:37] + "..."
             views.append((sent, label))
 
-    # Step 3: Cosine retrieval from UNIFIED pool (pos + neg)
+    # Step 3: Build unified pool (pos + neg)
     neg_cos = 0.0
     pos_cos = 0.0
     best_view_text = views[0][0]
@@ -3863,6 +4814,7 @@ def _score_nli_core(message, all_texts, all_categories, model=None,
     n_pos = len(all_texts)
     n_neg = len(neg_texts) if neg_texts else 0
 
+    # Compute cosine similarities (still needed for extraction scoring and best_view selection)
     if model is not None and all_embeddings is not None:
         from sentence_transformers.util import cos_sim
 
@@ -3872,7 +4824,6 @@ def _score_nli_core(message, all_texts, all_categories, model=None,
         for view_text, _ in views:
             emb = model.encode(view_text)
 
-            # Positive cosines
             p_sims = cos_sim(emb, all_embeddings)[0].tolist()
             view_max_pos = max(p_sims) if p_sims else 0.0
             if view_max_pos > pos_cos:
@@ -3882,7 +4833,6 @@ def _score_nli_core(message, all_texts, all_categories, model=None,
                 if s > pos_cosines[i]:
                     pos_cosines[i] = s
 
-            # Negative cosines
             if neg_embeddings is not None and neg_texts:
                 n_sims = cos_sim(emb, neg_embeddings)[0].tolist()
                 view_max_neg = max(n_sims) if n_sims else 0.0
@@ -3906,12 +4856,17 @@ def _score_nli_core(message, all_texts, all_categories, model=None,
                 "cosine": neg_cosines[i],
             })
 
-    # Sort by cosine, take top NLI_RETRIEVE_K for NLI re-ranking
-    unified_pool.sort(key=lambda x: x["cosine"], reverse=True)
-    retrieve_k = min(NLI_RETRIEVE_K, len(unified_pool))
-    candidates = unified_pool[:retrieve_k]
+    # Step 4: Select candidates for NLI scoring
+    if NLI_RETRIEVE_K == 0:
+        # Score all anchors (no cosine pre-filter)
+        candidates = unified_pool
+    else:
+        # Default: cosine pre-filter top-K, then NLI re-rank
+        unified_pool.sort(key=lambda x: x["cosine"], reverse=True)
+        retrieve_k = min(NLI_RETRIEVE_K, len(unified_pool))
+        candidates = unified_pool[:retrieve_k]
 
-    # Step 4: NLI re-rank -- asymmetric net scores (E - C)
+    # Step 5: NLI scoring — asymmetric E-C (entailment minus contradiction)
     if candidates:
         cand_texts = [c["text"] for c in candidates]
         pairs_fwd = [[best_view_text, t] for t in cand_texts]
@@ -3923,7 +4878,7 @@ def _score_nli_core(message, all_texts, all_categories, model=None,
         for i, cand in enumerate(candidates):
             cand["nli_score"] = NLI_FWD_WEIGHT * net_fwd[i] + bwd_weight * net_bwd[i]
 
-    # Step 5: Re-rank by NLI score, vote on top NLI_VOTE_K
+    # Step 6: Sort by NLI score, vote on top NLI_VOTE_K
     candidates.sort(key=lambda x: x.get("nli_score", 0), reverse=True)
     vote_k = min(NLI_VOTE_K, len(candidates))
     voters = candidates[:vote_k]
@@ -3963,7 +4918,7 @@ def _score_nli_core(message, all_texts, all_categories, model=None,
         action = "no_match"
 
     debug = {
-        "method": "nli",
+        "method": "nli_all" if NLI_RETRIEVE_K == 0 else "nli_prefilter",
         "nli_knn_score": nli_knn_score,
         "pos_in_k": pos_in_k,
         "neg_in_k": neg_in_k,
@@ -3975,6 +4930,7 @@ def _score_nli_core(message, all_texts, all_categories, model=None,
         "abstain": abstain,
         "action": action,
         "voters": voter_details,
+        "total_scored": len(candidates),
     }
 
     # Build results -- sorted by NLI score (candidates first, then rest by cosine)
@@ -4010,7 +4966,7 @@ def score_message_nli(message, all_texts, all_categories, model=None,
 
 
 # ---------------------------------------------------------------------------
-# Hybrid scoring (cosine + NLI KNN (20+20 voters))
+# Hybrid scoring (Merged KNN: cosine voters + NLI voters)
 # ---------------------------------------------------------------------------
 
 def score_message_hybrid(message, all_texts, all_categories, model=None,
@@ -4018,63 +4974,114 @@ def score_message_hybrid(message, all_texts, all_categories, model=None,
                          neutral_embeddings=None,
                          do_spellcheck=True, use_extraction=True):
     """
-    Hybrid scoring: stack cosine KNN and NLI KNN voters, count positives.
+    Hybrid scoring: merge cosine KNN voters + NLI KNN voters, count positives.
 
-    Takes 20 from cosine KNN + 20 from NLI KNN = 40 total voters.
-    score = (cos_positives + nli_positives) / 40.
+    Pipeline:
+      1. Cosine KNN: top POOL/2 anchors by cosine similarity
+      2. NLI KNN: top POOL/2 anchors by NLI E-C score (cosine pre-filtered)
+      3. Score with agreement weighting:
+         - Single positive (one system):   1 pt
+         - Duplicate positive (both agree): 3 pts (agreement bonus)
+         - Single negative (one system):   0 pts
+         - Duplicate negative (both agree): -1 pt (agreement penalty)
+         - score = points / POOL_SIZE
+
+    With HYBRID_POOL_SIZE=40: 20 cosine + 20 NLI, scored out of 40.
+    Dual agreement on positives is strongly rewarded; dual agreement on
+    negatives actively penalizes the score.
 
     Returns (results, corrected, corrections, extraction_info, neg_cos, debug_info)
     """
-    # --- NLI component ---
-    nli_results, corrected, corrections, extraction, neg_cos, nli_score, nli_debug = \
-        _score_nli_core(
+    half_pool = HYBRID_POOL_SIZE // 2
+
+    # --- Run cosine scoring ---
+    # score_message returns (results, extraction, knn_info)
+    cos_results, cos_extraction, cos_knn = score_message(
+        model, message, all_embeddings, all_texts, all_categories,
+        neg_embeddings=neg_embeddings, neg_texts=neg_texts,
+        neutral_embeddings=neutral_embeddings,
+        use_extraction=use_extraction)
+
+    # --- Run NLI scoring ---
+    # score_message_nli returns (results, corrected, corrections, extraction, neg_cos, final_score, debug)
+    nli_results, nli_corrected, nli_corrections, nli_extraction, nli_neg_cos, \
+        nli_score, nli_debug = score_message_nli(
             message, all_texts, all_categories, model=model,
             all_embeddings=all_embeddings, neg_texts=neg_texts,
             neg_embeddings=neg_embeddings, neutral_embeddings=neutral_embeddings,
             do_spellcheck=do_spellcheck, use_extraction=use_extraction)
 
-    # --- Cosine KNN component ---
-    knn_score = 0.0
-    knn_info = {}
-    if model is not None and all_embeddings is not None:
-        _, _, knn_info = score_message(
-            model, corrected, all_embeddings, all_texts, all_categories,
-            neg_embeddings=neg_embeddings, neg_texts=neg_texts,
-            neutral_embeddings=neutral_embeddings,
-            use_extraction=use_extraction)
-        knn_score = knn_info.get("knn_score", 0.0)
+    # --- Extract voter lists ---
+    # Cosine voters: knn_info["top_k_details"] = [(sim, is_pos, text), ...]
+    cos_top_k = cos_knn.get("top_k_details", [])[:half_pool]
+    cos_voters = []
+    for sim, is_pos, text in cos_top_k:
+        cos_voters.append({
+            "text": text[:60], "is_positive": is_pos,
+            "cosine": sim, "source": "cosine",
+        })
 
-    # --- Stack voters: cosine top-K + NLI top-K ---
-    cos_pos = knn_info.get("pos_in_k", 0)
-    cos_k = knn_info.get("k", 0)
-    nli_pos = nli_debug.get("pos_in_k", 0)
-    nli_k = nli_debug.get("vote_k", NLI_VOTE_K)
+    # NLI voters: debug["voters"] = [{"text", "is_positive", "category", "cosine"}, ...]
+    nli_voters = nli_debug.get("voters", [])[:half_pool]
+    for v in nli_voters:
+        v["source"] = "nli"
 
-    merged_pos = cos_pos + nli_pos
-    merged_total = cos_k + nli_k
+    # --- Agreement-weighted scoring ---
+    # Build lookup sets for fast overlap detection
+    cos_pos_set = set(v["text"] for v in cos_voters if v["is_positive"])
+    cos_neg_set = set(v["text"] for v in cos_voters if not v["is_positive"])
+    nli_pos_set = set(v["text"] for v in nli_voters if v["is_positive"])
+    nli_neg_set = set(v["text"] for v in nli_voters if not v["is_positive"])
 
-    # Hybrid score = simple count across all voters
-    hybrid_score = merged_pos / max(1, merged_total)
+    # Duplicates: anchors appearing in BOTH top-K lists
+    dup_pos = cos_pos_set & nli_pos_set   # both systems say positive
+    dup_neg = cos_neg_set & nli_neg_set   # both systems say negative
 
-    # Build results list
-    anchor_order = sorted(range(len(all_texts)),
-                          key=lambda i: nli_results[i][0] if i < len(nli_results) else 0,
-                          reverse=True)
-    results = [(hybrid_score, all_texts[i], all_categories[i], "") for i in anchor_order]
+    # Points:
+    #   Single positive (one system only): 1 pt
+    #   Duplicate positive (both agree):   3 pts  (agreement bonus +1)
+    #   Single negative (one system only): 0 pts
+    #   Duplicate negative (both agree):  -1 pt   (agreement penalty)
+    cos_pos = len(cos_pos_set)
+    nli_pos = len(nli_pos_set)
+    base_points = cos_pos + nli_pos              # each positive = 1 pt (duplicates counted twice = 2)
+    bonus = len(dup_pos)                         # +1 per duplicate positive (2 → 3)
+    penalty = len(dup_neg)                       # -1 per duplicate negative
+    points = base_points + bonus - penalty
+
+    total_voters = HYBRID_POOL_SIZE
+    hybrid_score = max(0.0, points / max(1, total_voters))  # clamp at 0
+
+    # Abstain when vote is too close
+    neg_points = total_voters - points
+    vote_margin = abs(points - neg_points) / max(1, total_voters)
+    abstain = vote_margin < NLI_ABSTAIN_MARGIN
+
+    # Use NLI corrections/extraction, cosine neg_cos
+    corrected = nli_corrected
+    corrections = nli_corrections
+    extraction = nli_extraction
+    neg_cos = cos_knn.get("max_neg", 0)
+
+    # Build results list (cosine order, but with hybrid score)
+    results = [(hybrid_score, text, cat, "") for (_, text, cat) in cos_results]
 
     debug = {
         "method": "hybrid",
         "combined": hybrid_score,
-        "merged_pos": merged_pos,
-        "merged_total": merged_total,
-        "nli_score": nli_score,
-        "knn_score": knn_score,
-        "nli_pos_in_k": nli_pos,
-        "nli_k": nli_k,
-        "cos_pos_in_k": cos_pos,
-        "cos_k": cos_k,
-        "nli_action": nli_debug.get("action", ""),
-        "abstain": nli_debug.get("abstain", False),
+        "pos_in_k": points,
+        "vote_k": total_voters,
+        "vote_margin": vote_margin,
+        "pool_size": HYBRID_POOL_SIZE,
+        "cos_pos": cos_pos,
+        "nli_pos": nli_pos,
+        "dup_pos": len(dup_pos),
+        "dup_neg": len(dup_neg),
+        "bonus": bonus,
+        "penalty": penalty,
+        "pos_cos": cos_knn.get("max_pos", 0),
+        "neg_cos": cos_knn.get("max_neg", 0),
+        "abstain": abstain,
     }
     return results, corrected, corrections, extraction, neg_cos, debug
 
@@ -4258,6 +5265,29 @@ def _call_llm_judge(message, proposition, top_anchors=None):
             data = resp.json()
             text = data["choices"][0]["message"]["content"]
 
+        elif provider == "openrouter":
+            # OpenRouter API (OpenAI-compatible, routes to 200+ models)
+            resp = httpx.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": "Bearer " + api_key,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": 300,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0,
+                },
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            text = data["choices"][0]["message"]["content"]
+
         elif provider in ("ollama", "local", "lmstudio", "vllm"):
             # Local model via Ollama or any OpenAI-compatible local server
             base_url = config.get("base_url", "http://localhost:11434")
@@ -4377,10 +5407,11 @@ def print_banner():
     print("  Role: {}".format(ANCHOR_ROLE))
     print("  Thresholds: match={}, warning={}, KNN K={}".format(
         MATCH_THRESHOLD, WARNING_THRESHOLD, COSINE_KNN_K))
-    print("  NLI: retrieve={}, vote={}, fwd_weight={}, abstain_margin={}".format(
-        NLI_RETRIEVE_K, NLI_VOTE_K, NLI_FWD_WEIGHT, NLI_ABSTAIN_MARGIN))
-    print("  Hybrid: cosine top-{} + NLI top-{} = {} voters, count positives".format(
-        COSINE_KNN_K, NLI_VOTE_K, COSINE_KNN_K + NLI_VOTE_K))
+    nli_mode = "pre-filter top-{}".format(NLI_RETRIEVE_K) if NLI_RETRIEVE_K > 0 else "pure (ALL anchors)"
+    print("  NLI: mode={}, vote_k={}, fwd_weight={}, abstain_margin={}".format(
+        nli_mode, NLI_VOTE_K, NLI_FWD_WEIGHT, NLI_ABSTAIN_MARGIN))
+    print("  Hybrid: merged KNN ({}cos + {}nli = pool {}) → count positives".format(
+        HYBRID_POOL_SIZE // 2, HYBRID_POOL_SIZE // 2, HYBRID_POOL_SIZE))
     print("")
 
 
@@ -4568,18 +5599,18 @@ def display_default_hybrid(results, corrected, corrections, extraction=None,
 
     # Show hybrid debug
     if debug:
-        nli_sc = debug.get("nli_score", 0)
-        knn_sc = debug.get("knn_score", 0)
         combined = debug.get("combined", 0)
-        m_pos = debug.get("merged_pos", 0)
-        m_total = debug.get("merged_total", 0)
-        cos_pos = debug.get("cos_pos_in_k", 0)
-        cos_k = debug.get("cos_k", 0)
-        nli_pos = debug.get("nli_pos_in_k", 0)
-        nli_k = debug.get("nli_k", NLI_VOTE_K)
-        print("  {}Hybrid: cos={}/{} ({:.0%})  nli={}/{} ({:.0%})  → total={}/{} ({:.0%}){}".format(
-            DIM, cos_pos, cos_k, knn_sc, nli_pos, nli_k, nli_sc,
-            m_pos, m_total, combined, RESET))
+        pts = debug.get("pos_in_k", 0)
+        vote_k = debug.get("vote_k", 0)
+        c_pos = debug.get("cos_pos", 0)
+        n_pos = debug.get("nli_pos", 0)
+        bon = debug.get("bonus", 0)
+        pen = debug.get("penalty", 0)
+        extra = ""
+        if bon: extra += " +{}dup".format(bon)
+        if pen: extra += " -{}neg".format(pen)
+        print("  {}Hybrid: {}cos + {}nli{} = {}/{} ({:.0%}){}".format(
+            DIM, c_pos, n_pos, extra, pts, vote_k, combined, RESET))
 
     print("\n  {}\n".format(format_verdict(top_score, neg_score)))
     print("  {:<6} {:>8}  {:<30} {}".format(
@@ -4607,18 +5638,18 @@ def display_verbose_hybrid(results, corrected, corrections, extraction=None,
         _display_extraction_info(extraction, verbose=True)
 
     if debug:
-        nli_sc = debug.get("nli_score", 0)
-        knn_sc = debug.get("knn_score", 0)
         combined = debug.get("combined", 0)
-        m_pos = debug.get("merged_pos", 0)
-        m_total = debug.get("merged_total", 0)
-        cos_pos = debug.get("cos_pos_in_k", 0)
-        cos_k = debug.get("cos_k", 0)
-        nli_pos = debug.get("nli_pos_in_k", 0)
-        nli_k = debug.get("nli_k", NLI_VOTE_K)
-        print("  {}Hybrid debug: cos={}/{} ({:.0%})  nli={}/{} ({:.0%})  → total={}/{} ({:.0%}){}".format(
-            DIM, cos_pos, cos_k, knn_sc, nli_pos, nli_k, nli_sc,
-            m_pos, m_total, combined, RESET))
+        pts = debug.get("pos_in_k", 0)
+        vote_k = debug.get("vote_k", 0)
+        c_pos = debug.get("cos_pos", 0)
+        n_pos = debug.get("nli_pos", 0)
+        bon = debug.get("bonus", 0)
+        pen = debug.get("penalty", 0)
+        extra = ""
+        if bon: extra += " +{}dup".format(bon)
+        if pen: extra += " -{}neg".format(pen)
+        print("  {}Hybrid debug: {}cos + {}nli{} = {}/{} ({:.0%}){}".format(
+            DIM, c_pos, n_pos, extra, pts, vote_k, combined, RESET))
 
     print("\n  {}\n".format(format_verdict(top_score, neg_score)))
     print("  {:<5} {:>8}  {:<30} {}".format("#", "NLI", "Category", "Anchor Text"))
@@ -4633,8 +5664,8 @@ def display_verbose_hybrid(results, corrected, corrections, extraction=None,
             zone = " " + YELLOW + "\u25c4 WARN" + RESET
         print("  {:<5} {:>17}  {}{:<30}{} \"{}\"{}".format(
             rank, cs, DIM, dc, RESET, text, zone))
-    print("\n  {}Total: {} | Hybrid = cosine top-K + NLI top-K (20+20 voters){}".format(
-        DIM, len(results), RESET))
+    print("\n  {}Total: {} | Hybrid = merged KNN ({}cos + {}nli){}".format(
+        DIM, len(results), HYBRID_POOL_SIZE // 2, HYBRID_POOL_SIZE // 2, RESET))
     print()
 
 
@@ -4926,10 +5957,10 @@ def display_compare(message, mode_results, index=None, total=None):
         elif m == "hybrid":
             hyb_debug = mode_results[m].get("debug")
             if hyb_debug:
-                m_pos = hyb_debug.get("merged_pos", 0)
-                m_total = hyb_debug.get("merged_total", 0)
+                h_pos = hyb_debug.get("pos_in_k", 0)
+                h_k = hyb_debug.get("vote_k", 0)
                 s = mode_results[m]["score"]
-                cell = "{}/{} ({:.0%})".format(m_pos, m_total, s)
+                cell = "{}/{} ({:.0%})".format(h_pos, h_k, s)
             else:
                 s = mode_results[m]["score"]
                 cell = "{:.4f}".format(s)
@@ -4989,15 +6020,17 @@ def display_compare(message, mode_results, index=None, total=None):
     debug = hyb.get("debug")
     if debug:
         combined = debug.get("combined", 0)
-        m_pos = debug.get("merged_pos", 0)
-        m_total = debug.get("merged_total", 0)
-        cos_pos = debug.get("cos_pos_in_k", 0)
-        cos_k = debug.get("cos_k", 0)
-        nli_pos = debug.get("nli_pos_in_k", 0)
-        nli_k = debug.get("nli_k", NLI_VOTE_K)
-        print("  {}Hybrid: cos={}/{} nli={}/{} → total={}/{} ({:.0%}){}".format(
-            DIM, cos_pos, cos_k, nli_pos, nli_k,
-            m_pos, m_total, combined, RESET))
+        h_pos = debug.get("pos_in_k", 0)
+        h_k = debug.get("vote_k", 0)
+        c_pos = debug.get("cos_pos", 0)
+        n_pos = debug.get("nli_pos", 0)
+        bon = debug.get("bonus", 0)
+        pen = debug.get("penalty", 0)
+        extra = ""
+        if bon: extra += " +{}dup".format(bon)
+        if pen: extra += " -{}neg".format(pen)
+        print("  {}Hybrid: {}cos + {}nli{} = {}/{} ({:.0%}){}".format(
+            DIM, c_pos, n_pos, extra, h_pos, h_k, combined, RESET))
 
     print()
 
@@ -5245,14 +6278,168 @@ def run_compare_interactive(model, embs, texts, cats,
 
 
 # ---------------------------------------------------------------------------
-# 3D Visualization
+# ROC Auto-Calibration
+# ---------------------------------------------------------------------------
+
+def auto_calibrate(filepath, model, embs, texts, cats, neg_embs):
+    """
+    Compute ROC curve from labeled file and find optimal thresholds.
+
+    Reads a labeled file (same format as --compare), runs KNN scoring on
+    each message, then computes the ROC curve and selects thresholds that
+    maximize F1 score.
+
+    Updates config_NAME.ini with the calibrated thresholds.
+    """
+    import numpy as np
+
+    # Parse labeled file
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    messages, labels = _parse_labeled_file(content)
+    if not labels or not any(l is not None for l in labels):
+        print("  ERROR: File must contain labeled messages (MATCH/CLEAN/label)")
+        print("  Format: message text [MATCH] or message text [CLEAN]")
+        return
+
+    labeled = [(msg, lab) for msg, lab in zip(messages, labels) if lab is not None]
+    if len(labeled) < 10:
+        print("  ERROR: Need at least 10 labeled messages for calibration (got {})".format(
+            len(labeled)))
+        return
+
+    print("\n  {}Auto-calibration:{} Scoring {} labeled messages...".format(
+        BOLD, RESET, len(labeled)))
+
+    # Score each message with KNN
+    scores = []
+    true_labels = []
+
+    combined_embs = np.array(embs)
+    combined_labels = [1] * len(texts)
+    if neg_embs is not None and len(neg_embs) > 0:
+        neg_embs_np = np.array(neg_embs)
+        combined_embs = np.vstack([combined_embs, neg_embs_np])
+        combined_labels.extend([0] * len(neg_embs_np))
+
+    knn_k = min(COSINE_KNN_K, len(combined_embs))
+
+    for msg, label in labeled:
+        query_emb = model.encode([msg], show_progress_bar=False)[0]
+        sims = combined_embs @ query_emb / (
+            np.linalg.norm(combined_embs, axis=1) * np.linalg.norm(query_emb) + 1e-10)
+        top_k_idx = np.argsort(sims)[-knn_k:]
+        pos_in_k = sum(1 for i in top_k_idx if combined_labels[i] == 1)
+        knn_score = pos_in_k / knn_k
+
+        scores.append(knn_score)
+        true_labels.append(1 if label in ("MATCH", "WARNING") else 0)
+
+    scores = np.array(scores)
+    true_labels = np.array(true_labels)
+
+    n_pos = true_labels.sum()
+    n_neg = len(true_labels) - n_pos
+    print("    {} positive, {} negative in calibration set".format(n_pos, n_neg))
+
+    if n_pos < 3 or n_neg < 3:
+        print("  ERROR: Need at least 3 of each class for calibration")
+        return
+
+    # Find optimal thresholds by scanning
+    best_f1 = 0
+    best_match = 0.70
+    best_warn = 0.50
+
+    for match_t in np.arange(0.40, 0.95, 0.05):
+        for warn_t in np.arange(0.30, match_t, 0.05):
+            # Predict: score > warn_t → flagged (MATCH or WARNING)
+            predicted = (scores > warn_t).astype(int)
+            tp = ((predicted == 1) & (true_labels == 1)).sum()
+            fp = ((predicted == 1) & (true_labels == 0)).sum()
+            fn = ((predicted == 0) & (true_labels == 1)).sum()
+
+            precision = tp / max(1, tp + fp)
+            recall = tp / max(1, tp + fn)
+            f1 = 2 * precision * recall / max(1e-10, precision + recall)
+
+            if f1 > best_f1:
+                best_f1 = f1
+                best_match = match_t
+                best_warn = warn_t
+
+    # Also compute accuracy at best thresholds
+    predicted_best = np.zeros_like(true_labels)
+    predicted_best[scores > best_warn] = 1
+    accuracy = (predicted_best == true_labels).mean()
+
+    print("\n  {}Calibration Results:{}".format(BOLD, RESET))
+    print("    Current thresholds:    match={:.2f}, warning={:.2f}".format(
+        MATCH_THRESHOLD, WARNING_THRESHOLD))
+    print("    Optimal thresholds:    match={:.2f}, warning={:.2f}".format(
+        best_match, best_warn))
+    print("    F1 score:              {:.3f}".format(best_f1))
+    print("    Accuracy:              {:.1%}".format(accuracy))
+
+    # Show score distribution
+    print("\n    Score distribution:")
+    pos_scores = scores[true_labels == 1]
+    neg_scores = scores[true_labels == 0]
+    print("      Positive (should match): mean={:.2f}, min={:.2f}, max={:.2f}".format(
+        pos_scores.mean(), pos_scores.min(), pos_scores.max()))
+    print("      Negative (should clean): mean={:.2f}, min={:.2f}, max={:.2f}".format(
+        neg_scores.mean(), neg_scores.min(), neg_scores.max()))
+
+    # Show per-message results
+    print("\n    Per-message scores:")
+    for i, (msg, label) in enumerate(labeled):
+        score = scores[i]
+        pred = "MATCH" if score > best_match else ("WARNING" if score > best_warn else "CLEAN")
+        expected = "MATCH" if true_labels[i] == 1 else "CLEAN"
+        correct = "✓" if (pred != "CLEAN") == (expected == "MATCH") else "✗"
+        disp = msg[:60] + "..." if len(msg) > 60 else msg
+        print("      {} {:.0%} pred={:<7} exp={:<7} \"{}\"".format(
+            correct, score, pred, expected, disp))
+
+    # Write to config file
+    import configparser as _cp
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "config_{}.ini".format(SCRIPT_NAME))
+    if os.path.exists(config_path):
+        cfg = _cp.ConfigParser()
+        cfg.read(config_path, encoding="utf-8")
+        if not cfg.has_section("thresholds"):
+            cfg.add_section("thresholds")
+        cfg.set("thresholds", "match_threshold", "{:.2f}".format(best_match))
+        cfg.set("thresholds", "warning_threshold", "{:.2f}".format(best_warn))
+        with open(config_path, "w", encoding="utf-8") as f:
+            cfg.write(f)
+        print("\n  {}{}\u2713 Updated {} with calibrated thresholds{}".format(
+            GREEN, BOLD, config_path, RESET))
+    else:
+        print("\n  Config file not found at {}. Set thresholds manually:".format(config_path))
+        print("    match_threshold = {:.2f}".format(best_match))
+        print("    warning_threshold = {:.2f}".format(best_warn))
+
+
+# ---------------------------------------------------------------------------
+# Visualization
 # ---------------------------------------------------------------------------
 
 def show_graph(model):
-    """3D interactive scatter plot of anchor embeddings using PCA."""
+    """
+    2D visualization of anchor embeddings with distance fidelity metrics.
+
+    Uses UMAP (if available) or t-SNE for 2D projection — both preserve
+    local neighborhood structure much better than PCA. Shows:
+      - Positive anchors (blue), negative (black), proposition (red star)
+      - Cosine similarity distribution histogram (pos-pos vs pos-neg)
+      - Distance fidelity: Spearman correlation between true cosine distances
+        and projected 2D distances (measures how trustworthy the plot is)
+    """
     try:
         import matplotlib
-        from sklearn.decomposition import PCA
         import numpy as np
     except ImportError as e:
         print("\n  ERROR: Missing dependency for --graph: {}".format(e))
@@ -5271,21 +6458,16 @@ def show_graph(model):
         matplotlib.use("Agg")
 
     import matplotlib.pyplot as plt
-    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
     using_agg = matplotlib.get_backend().lower() == "agg"
 
-    # Collect positive anchors
+    # Collect anchors
     pos_texts = []
     for cat, examples in ANCHORS.items():
-        for ex in examples:
-            pos_texts.append(ex)
-
-    # Collect negative anchors
+        pos_texts.extend(examples)
     neg_texts = []
     for cat, examples in NEGATIVE_ANCHORS.items():
-        for ex in examples:
-            neg_texts.append(ex)
+        neg_texts.extend(examples)
 
     n_pos = len(pos_texts)
     n_neg = len(neg_texts)
@@ -5294,65 +6476,114 @@ def show_graph(model):
     print("  Embedding {} positive + {} negative anchors...".format(n_pos, n_neg))
     all_embs = model.encode(all_texts, show_progress_bar=False)
     prop_emb = model.encode([PROPOSITION])
-
     combined = np.vstack([all_embs, prop_emb])
 
-    pca = PCA(n_components=3)
-    coords_3d = pca.fit_transform(combined)
-    pos_coords = coords_3d[:n_pos]
-    neg_coords = coords_3d[n_pos:n_pos + n_neg]
-    prop_coord = coords_3d[-1]
+    # Compute true cosine similarities for fidelity check
+    norms = np.linalg.norm(combined, axis=1, keepdims=True) + 1e-10
+    normed = combined / norms
+    true_cos_sim = normed @ normed.T
 
-    explained = pca.explained_variance_ratio_
-    print("  PCA variance explained: {:.1f}% + {:.1f}% + {:.1f}% = {:.1f}%".format(
-        explained[0]*100, explained[1]*100, explained[2]*100, sum(explained)*100))
+    # 2D projection: try UMAP, fall back to t-SNE, then PCA
+    method = "PCA"
+    try:
+        from umap import UMAP
+        reducer = UMAP(n_components=2, metric="cosine", n_neighbors=15,
+                       min_dist=0.1, random_state=42)
+        coords_2d = reducer.fit_transform(combined)
+        method = "UMAP"
+    except ImportError:
+        try:
+            from sklearn.manifold import TSNE
+            reducer = TSNE(n_components=2, metric="cosine", perplexity=min(30, len(combined) - 1),
+                           random_state=42, init="random")
+            coords_2d = reducer.fit_transform(combined)
+            method = "t-SNE"
+        except Exception:
+            from sklearn.decomposition import PCA
+            pca = PCA(n_components=2)
+            coords_2d = pca.fit_transform(combined)
+            method = "PCA ({:.0f}% var)".format(pca.explained_variance_ratio_.sum() * 100)
 
-    fig = plt.figure(figsize=(12, 9))
-    ax = fig.add_subplot(111, projection="3d")
+    pos_coords = coords_2d[:n_pos]
+    neg_coords = coords_2d[n_pos:n_pos + n_neg]
+    prop_coord = coords_2d[-1]
 
-    # Positive anchors (colored)
-    ax.scatter(pos_coords[:, 0], pos_coords[:, 1], pos_coords[:, 2],
-               c="#2196F3", s=50, alpha=0.7,
-               edgecolors="white", linewidths=0.5)
+    # Compute distance fidelity (Spearman correlation)
+    try:
+        from scipy.stats import spearmanr
+        proj_dists = np.linalg.norm(coords_2d[:, None] - coords_2d[None, :], axis=2)
+        true_dists = 1.0 - true_cos_sim  # cosine distance
+        triu_idx = np.triu_indices(len(combined), k=1)
+        fidelity, _ = spearmanr(true_dists[triu_idx], proj_dists[triu_idx])
+    except ImportError:
+        fidelity = float("nan")
+        print("  (Install scipy for distance fidelity metric)")
 
-    # Negative anchors (black)
-    ax.scatter(neg_coords[:, 0], neg_coords[:, 1], neg_coords[:, 2],
-               c="black", s=35, alpha=0.5,
-               edgecolors="white", linewidths=0.5, marker="x")
+    fidelity_str = "{:.2f}".format(fidelity) if not np.isnan(fidelity) else "N/A"
+    print("  Projection: {} | Distance fidelity: {}".format(method, fidelity_str))
+    if not np.isnan(fidelity):
+        print("  Fidelity interpretation: {:.0%} of neighbor rankings preserved".format(fidelity))
 
-    # Proposition (red star)
-    ax.scatter([prop_coord[0]], [prop_coord[1]], [prop_coord[2]],
-               c="red", s=300, marker="*", edgecolors="black",
-               linewidths=1, zorder=10)
+    # --- Create figure with 2 panels ---
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7),
+                                    gridspec_kw={"width_ratios": [3, 2]})
 
-    # Light lines from proposition to positive anchors
-    for i in range(n_pos):
-        ax.plot([prop_coord[0], pos_coords[i, 0]],
-                [prop_coord[1], pos_coords[i, 1]],
-                [prop_coord[2], pos_coords[i, 2]],
-                color="red", alpha=0.08, linewidth=0.5)
+    # Panel 1: 2D scatter plot
+    ax1.scatter(neg_coords[:, 0], neg_coords[:, 1],
+                c="black", s=20, alpha=0.4, marker="x", label="Negative ({})".format(n_neg))
+    ax1.scatter(pos_coords[:, 0], pos_coords[:, 1],
+                c="#2196F3", s=40, alpha=0.7, edgecolors="white", linewidths=0.3,
+                label="Positive ({})".format(n_pos))
+    ax1.scatter([prop_coord[0]], [prop_coord[1]],
+                c="red", s=200, marker="*", edgecolors="black", linewidths=1,
+                zorder=10, label="Proposition")
+    ax1.set_title("{} — {} projection (fidelity: {})".format(
+        SCRIPT_NAME, method, fidelity_str), fontsize=12, fontweight="bold")
+    ax1.legend(fontsize=9)
+    ax1.set_xticks([])
+    ax1.set_yticks([])
 
-    ax.set_xlabel("PC1 ({:.1f}%)".format(explained[0]*100))
-    ax.set_ylabel("PC2 ({:.1f}%)".format(explained[1]*100))
-    ax.set_zlabel("PC3 ({:.1f}%)".format(explained[2]*100))
-    ax.set_title("Semantic Anchors: {} \u2014 {} positive (blue) + {} negative (black)".format(
-        SCRIPT_NAME, n_pos, n_neg), fontsize=13, fontweight="bold")
+    # Panel 2: Cosine similarity distributions
+    pos_embs = all_embs[:n_pos]
+    neg_embs_arr = all_embs[n_pos:]
+    pos_norms = pos_embs / (np.linalg.norm(pos_embs, axis=1, keepdims=True) + 1e-10)
+    neg_norms = neg_embs_arr / (np.linalg.norm(neg_embs_arr, axis=1, keepdims=True) + 1e-10)
 
-    norms = np.linalg.norm(all_embs[:n_pos], axis=1, keepdims=True)
-    normed = all_embs[:n_pos] / (norms + 1e-10)
-    sim_m = normed @ normed.T
-    np.fill_diagonal(sim_m, 0)
-    stats = "Positive avg sim: {:.4f} | Min: {:.4f} | Max: {:.4f}".format(
-        sim_m.mean(), sim_m[sim_m > 0].min(), sim_m.max())
-    ax.text2D(0.02, 0.96, stats, transform=ax.transAxes, fontsize=8,
-              bbox=dict(boxstyle="round", facecolor="white", alpha=0.8))
+    # Pos-pos similarities
+    pp_sim = pos_norms @ pos_norms.T
+    pp_triu = pp_sim[np.triu_indices(n_pos, k=1)]
+
+    # Pos-neg similarities (cross-class)
+    pn_sim = (pos_norms @ neg_norms.T).flatten()
+
+    # Neg-neg similarities
+    nn_sim = neg_norms @ neg_norms.T
+    nn_triu = nn_sim[np.triu_indices(n_neg, k=1)]
+
+    ax2.hist(pp_triu, bins=40, alpha=0.6, color="#2196F3", label="Pos↔Pos", density=True)
+    ax2.hist(pn_sim, bins=40, alpha=0.6, color="#FF5722", label="Pos↔Neg", density=True)
+    ax2.hist(nn_triu, bins=40, alpha=0.4, color="gray", label="Neg↔Neg", density=True)
+    ax2.axvline(x=MATCH_THRESHOLD, color="red", linestyle="--", alpha=0.7, label="Match thresh")
+    ax2.axvline(x=WARNING_THRESHOLD, color="orange", linestyle="--", alpha=0.7, label="Warn thresh")
+    ax2.set_xlabel("Cosine Similarity")
+    ax2.set_ylabel("Density")
+    ax2.set_title("Pairwise Cosine Similarity Distribution", fontsize=11, fontweight="bold")
+    ax2.legend(fontsize=8)
+
+    # Stats annotation
+    overlap = np.mean((pn_sim > pp_triu.mean() - pp_triu.std()))
+    stats = "Pos-Pos: μ={:.3f}\nPos-Neg: μ={:.3f}\nClass overlap: {:.0%}".format(
+        pp_triu.mean(), pn_sim.mean(), overlap)
+    ax2.text(0.97, 0.97, stats, transform=ax2.transAxes, fontsize=8,
+             va="top", ha="right",
+             bbox=dict(boxstyle="round", facecolor="white", alpha=0.8))
 
     plt.tight_layout()
 
     if using_agg:
-        out_file = "semantic_anchor_{}_3d.png".format(SCRIPT_NAME)
+        out_file = "semantic_anchor_{}_dist.png".format(SCRIPT_NAME)
         plt.savefig(out_file, dpi=150)
-        print("  Backend is non-interactive. Saved plot to: {}".format(out_file))
+        print("  Saved plot to: {}".format(out_file))
         import subprocess, platform
         try:
             if platform.system() == "Darwin":
@@ -5364,7 +6595,7 @@ def show_graph(model):
         except Exception:
             pass
     else:
-        print("  Showing 3D plot (drag to rotate)...")
+        print("  Showing plot (close window to continue)...")
         plt.show()
 
 
@@ -5440,7 +6671,7 @@ def run_interactive(model, embs, texts, cats, verbose=False, mode="cosine",
     mode_labels = {
         "cosine": "Cosine KNN",
         "nli": "NLI KNN",
-        "hybrid": "Hybrid (cosine + NLI KNN, 20+20 voters)",
+        "hybrid": "Hybrid (merged cosine + NLI KNN)",
         "llm": "LLM Judge",
     }
     mode_label = mode_labels.get(mode, mode)
@@ -5771,7 +7002,7 @@ def main():
     parser.add_argument("--show-examples", action="store_true",
         help="Print all positive examples by category")
     parser.add_argument("--graph", "-g", action="store_true",
-        help="Show 3D interactive visualization of anchor spread")
+        help="Show 2D visualization of anchor distribution + similarity histograms")
     parser.add_argument("--mode", "-m", type=str, default="cosine",
         choices=["cosine", "nli", "hybrid", "llm"],
         help="Scoring mode: cosine, nli, hybrid (NLI+KNN blend), llm (LLM judge)")
@@ -5788,6 +7019,8 @@ def main():
         help="Enable autocorrect spell checking (disabled by default)")
     parser.add_argument("--compare", "-c", action="store_true",
         help="Compare all scoring modes side-by-side (cosine, nli, hybrid, +llm)")
+    parser.add_argument("--auto-calibrate", type=str, default=None, metavar="FILE",
+        help="Compute optimal thresholds from labeled file (ROC F1 optimization)")
     args = parser.parse_args()
 
     # Resolve mode from flags
@@ -5849,9 +7082,22 @@ def main():
      neg_texts, neg_cats, neg_embs,
      neutral_embs) = prepare_anchors(model)
 
+    # Auto-calibrate: compute optimal thresholds from labeled file
+    if args.auto_calibrate:
+        auto_calibrate(args.auto_calibrate, model, all_embs, all_texts, all_cats, neg_embs)
+        if _tee: _tee.close(); print("  Log saved: {}".format(_tee.log_path))
+        return
+
     if use_extraction:
         print("  Extraction: {}ON{} (tau={}, min_words={})".format(
             GREEN, RESET, EXTRACTION_RELEVANCE_TAU, EXTRACTION_MIN_WORDS))
+
+    # AMO status
+    if _amo_active:
+        print("  AMO:        {}ACTIVE{} (using trained embeddings from optimized_anchors_{}.npz)".format(
+            YELLOW, RESET, SCRIPT_NAME))
+    else:
+        print("  AMO:        {}OFF{} (using original embeddings)".format(DIM, RESET))
 
     # Log model sources
     if _model_sources:
@@ -5871,11 +7117,17 @@ def main():
             print("  Compare mode: {}ON{} (all scoring methods side-by-side)".format(
                 GREEN, RESET))
         elif mode == "hybrid":
-            print("  Hybrid mode: {}ON{} (cosine + NLI KNN (20+20 voters))".format(
-                GREEN, RESET))
+            print("  Hybrid mode: {}ON{} (merged KNN: {}cos + {}nli = pool {})".format(
+                GREEN, RESET, HYBRID_POOL_SIZE // 2, HYBRID_POOL_SIZE // 2, HYBRID_POOL_SIZE))
         else:
-            print("  NLI-only mode: {}ON{}".format(GREEN, RESET))
-            print("  Scoring: NLI entailment on ALL {} anchors".format(total_anchors))
+            if NLI_RETRIEVE_K == 0:
+                print("  NLI mode: {}ON{} (pure — E-C scoring on ALL {} anchors)".format(
+                    GREEN, RESET, total_anchors))
+            else:
+                print("  NLI mode: {}ON{} (cosine pre-filter top {} → NLI re-rank)".format(
+                    GREEN, RESET, NLI_RETRIEVE_K))
+            print("  Scoring: E-C (entailment minus contradiction) → top-{} KNN vote".format(
+                NLI_VOTE_K))
             print("  Long messages: proposition-guided extraction + multi-view NLI\n")
 
     elif mode == "llm":
@@ -6001,6 +7253,1052 @@ def generate_script(name):
 
 
 # ---------------------------------------------------------------------------
+# Anchor Manifold Optimization (AMO) — trainable anchor embeddings
+# ---------------------------------------------------------------------------
+
+def generate_synthetic_training_data(proposition, config, n_examples, role="user",
+                                      existing_pos=None, existing_neg=None):
+    """Generate N synthetic adversarial training pairs for AMO training.
+
+    Uses a "sparring" strategy: instead of generic examples, generates
+    adversarial pairs that create maximum tension at the decision boundary.
+
+    Pair types:
+      STEALTH (positive label): Harmful intent disguised with benign vocabulary,
+        academic framing, fictional wrapping, or professional language.
+      TRAP (negative label): Benign intent loaded with dangerous-sounding
+        keywords, domain terminology, and alarming context.
+
+    Role-aware generation:
+      - role="user": examples as user messages, distributed across user-style
+        categories (direct requests, euphemistic, hypothetical, etc.)
+      - role="assistant": examples as AI assistant responses, distributed across
+        response categories (informational, instructional, refusal, etc.)
+      Categories are read from config.ini via parse_categories().
+
+    Generation guarantees:
+      - Exact target count: while-loop runs until target is met. Only stall
+        detection (3 consecutive rounds with 0 new examples) can stop early.
+      - Angle rotation: each retry uses a different creative direction.
+      - Zero-overlap rule: existing anchors passed to LLM with exclusion block.
+      - Strict 50/50 balance: retries the lagging class before trimming.
+      - Case-insensitive dedup.
+
+    Note: embedding-based diversity filtering (removing near-duplicate
+    paraphrases) is applied AFTER this function returns, in the caller
+    (train_anchor_manifold), which also handles regeneration of shortfall.
+
+    Returns: list of (text, label) where label is 1 (positive) or 0 (negative).
+    """
+    import random
+
+    half = n_examples // 2
+    rc = _role_context(role)
+
+    # --- Read synthetic generation config ---
+    diversity_temp = config.get("training", "diversity_temp", fallback="0.8")
+    adversarial_depth = config.get("training", "adversarial_depth", fallback="high")
+    context_variety = config.get("training", "context_variety", fallback="true").lower() in ("true", "1", "yes")
+
+    depth_instructions = {
+        "low": (
+            "Generate straightforward edge cases. Some should be tricky but "
+            "most can be relatively clear-cut."
+        ),
+        "medium": (
+            "Generate moderately tricky edge cases. At least half should require "
+            "careful reading to classify correctly. Use some misdirection."
+        ),
+        "high": (
+            "Generate MAXIMALLY ADVERSARIAL edge cases. Every example should be "
+            "deliberately designed to fool a classifier. Use heavy misdirection, "
+            "plausible deniability, nested framing, and vocabulary cross-contamination. "
+            "A human reviewer should need to think carefully about each one."
+        ),
+    }
+    depth_text = depth_instructions.get(adversarial_depth, depth_instructions["high"])
+
+    # --- Build context variety instructions ---
+    variety_text = ""
+    if context_variety:
+        variety_text = (
+            "\nFORMAT VARIETY: Each example must use a DIFFERENT format or context. "
+            "Distribute across: casual chat messages, formal emails, code comments, "
+            "academic paper excerpts, forum posts, customer support tickets, "
+            "social media posts, internal memos, technical documentation, "
+            "creative writing excerpts, interview transcripts, and legal/compliance text.\n"
+        )
+
+    # --- Zero-overlap exclusion block ---
+    exclusion_block = ""
+    all_existing = []
+    if existing_pos:
+        all_existing.extend(existing_pos)
+    if existing_neg:
+        all_existing.extend(existing_neg)
+
+    if all_existing:
+        # Sample up to 30 for the prompt (avoid token overflow)
+        sample = random.sample(all_existing, min(30, len(all_existing)))
+        exclusion_block = (
+            "\n═══ ZERO-OVERLAP RULE ═══\n"
+            "Do NOT use any phrases, scenarios, or examples found below. "
+            "These are EXISTING anchors from anchors_list.json. "
+            "Generate 100%% NOVEL scenarios that test the LIMITS of this proposition. "
+            "Every example must describe a situation, framing, or context that "
+            "does NOT appear in this list:\n"
+        )
+        for ex in sample:
+            exclusion_block += "  ✗ {}\n".format(ex[:100])
+        exclusion_block += "═══ END EXCLUSION LIST ═══\n\n"
+
+    # --- Build category context for role-appropriate generation ---
+    categories = parse_categories(config, role=role)
+    cat_block = ""
+    if categories:
+        cat_list = "\n".join("  - {}".format(c) for c in categories[:15])  # cap to avoid token overflow
+        if role == "assistant":
+            cat_block = (
+                "\nROLE: Generate examples as AI ASSISTANT RESPONSES (not user messages).\n"
+                "Each example should read like something an AI assistant would write.\n"
+                "Distribute examples across these response categories:\n"
+                "{}\n\n"
+            ).format(cat_list)
+        else:
+            cat_block = (
+                "\nROLE: Generate examples as USER MESSAGES (not assistant responses).\n"
+                "Each example should read like something a real user would type.\n"
+                "Distribute examples across these request categories:\n"
+                "{}\n\n"
+            ).format(cat_list)
+
+    # --- STEALTH examples: subtle positive matches (label = 1) ---
+    stealth_prompt = (
+        "{safety}"
+        "PROPOSITION: \"{prop}\"\n\n"
+        "{exclusion}"
+        "{cats}"
+        "Generate {n} additional {noun} that MATCH this proposition.\n\n"
+        "These are for training a SAFETY CLASSIFIER to detect subtle cases. "
+        "The classifier already catches obvious matches — now we need examples that test "
+        "the boundary. These examples should genuinely match the proposition but use "
+        "indirect, subtle, or non-obvious formulations:\n\n"
+        "  - Euphemistic or coded language instead of direct terms\n"
+        "  - Hypothetical or fictional framing (screenplay, novel, thought experiment)\n"
+        "  - Academic or research framing (studying, analyzing, documenting)\n"
+        "  - Professional jargon that a domain expert would recognize\n"
+        "  - Multi-step requests where the relevant part is buried mid-conversation\n"
+        "  - Polite or collaborative tone\n"
+        "  - Emotional appeals or personal stories that embed the core request\n\n"
+        "{depth}\n\n"
+        "{variety}"
+        "Each example must be SEMANTICALLY DISTINCT — no paraphrases.\n"
+        "Return exactly {n} examples, one per line. No numbering, bullets, or labels.\n"
+    ).format(
+        safety=rc["safety_context"], prop=proposition,
+        exclusion=exclusion_block, cats=cat_block, depth=depth_text,
+        n=half, noun=rc["example_noun"], variety=variety_text
+    )
+
+    # --- TRAP examples: hard negatives with overlapping vocabulary (label = 0) ---
+    trap_prompt = (
+        "{safety}"
+        "PROPOSITION: \"{prop}\"\n\n"
+        "{exclusion}"
+        "{cats}"
+        "Generate {n} HARD NEGATIVE {noun} for testing a safety classifier.\n\n"
+        "Hard negatives are examples that do NOT match the proposition but use "
+        "similar vocabulary and domain terminology. A naive classifier would "
+        "incorrectly flag these, but they have clearly LEGITIMATE intent:\n\n"
+        "  - Security professionals discussing attack vectors for DEFENSIVE purposes\n"
+        "  - Educators explaining techniques in an academic or classroom context\n"
+        "  - Victims or incident responders describing what happened (not requesting how-to)\n"
+        "  - Compliance officers auditing existing security measures\n"
+        "  - Journalists investigating and reporting on incidents\n"
+        "  - Fiction writers researching technical details for realistic storytelling\n"
+        "  - Parents or IT administrators discussing monitoring for PROTECTIVE purposes\n"
+        "  - Bug bounty hunters describing findings in responsible disclosure reports\n\n"
+        "{depth}\n\n"
+        "{variety}"
+        "KEY: Every example should use vocabulary that OVERLAPS heavily with the "
+        "proposition's domain, but the actual INTENT must be clearly legitimate.\n\n"
+        "Each example must be SEMANTICALLY DISTINCT — no paraphrases.\n"
+        "Return exactly {n} examples, one per line. No numbering, bullets, or labels.\n"
+    ).format(
+        safety=rc["safety_context"], prop=proposition,
+        exclusion=exclusion_block, cats=cat_block, depth=depth_text,
+        n=half, noun=rc["example_noun"], variety=variety_text
+    )
+
+    system = (
+        "You generate adversarial training data for an AI safety classifier. "
+        "Your job is to create the HARDEST possible examples that push the "
+        "decision boundary to its limits. Output only the requested examples, "
+        "one per line. No explanations, no labels, no metadata."
+    )
+
+    # --- Generate with retry until target is reached ---
+    STALL_PATIENCE = 3  # stop only if N consecutive rounds produce 0 new examples
+
+    # Angle rotation: each retry uses a different creative direction so the LLM
+    # doesn't keep generating the same cluster of examples.
+    RETRY_ANGLES = [
+        "Use completely different vocabulary, sentence structure, and framing than before.",
+        "Try unusual contexts: different professions, cultures, age groups, or scenarios.",
+        "Use indirect language, euphemisms, slang, or coded speech patterns.",
+        "Frame requests as coming from different personas: students, writers, researchers, gamers.",
+        "Vary the length and complexity — mix very short (5-10 words) with longer multi-sentence ones.",
+        "Use question formats, imperative commands, hypotheticals, and conditional statements.",
+        "Include misspellings, abbreviations, casual internet language, or non-native speaker patterns.",
+        "Think about edge cases: requests that are almost but not quite matching the category.",
+        "Use formal/academic language, legal/policy framing, or journalistic phrasing.",
+        "Consider multi-turn conversation fragments, follow-up messages, or out-of-context snippets.",
+    ]
+
+    def _generate_and_parse(prompt, label_name, target_count):
+        """Generate examples until exactly target_count is reached.
+
+        Runs in a while-loop with no round cap — only stall detection
+        (STALL_PATIENCE consecutive rounds with 0 new examples) can stop
+        it short of the target. Each retry rotates through creative angles
+        and shows a random sample of already-generated examples.
+        """
+        all_examples = []
+        all_examples_lower = set()  # for fast case-insensitive dedup
+        stall_count = 0
+        round_num = 0
+
+        while len(all_examples) < target_count:
+            round_num += 1
+            need = target_count - len(all_examples)
+
+            if round_num == 1:
+                retry_prompt = prompt
+            else:
+                # Random sample of existing examples (not always the tail)
+                sample_size = min(20, len(all_examples))
+                sample = random.sample(all_examples, sample_size) if sample_size > 0 else []
+                existing_block = "\n".join(
+                    "  ✗ {}".format(ex[:120]) for ex in sample)
+
+                # Rotate through creative angles
+                angle = RETRY_ANGLES[(round_num - 1) % len(RETRY_ANGLES)]
+
+                retry_prompt = prompt + (
+                    "\n\nPROGRESS: I have {} so far, need {} MORE to reach {}.\n"
+                    "ALREADY GENERATED (do NOT repeat, paraphrase, or closely rephrase these):\n"
+                    "{}\n\n"
+                    "CREATIVE DIRECTION FOR THIS BATCH: {}\n\n"
+                    "Generate exactly {} NEW, DISTINCT examples that are UNLIKE anything above."
+                ).format(len(all_examples), need, target_count,
+                         existing_block, angle, min(need, 30))
+
+            raw = call_llm_raw(config, system, retry_prompt)
+            if not raw:
+                print("      {} generation failed (round {})".format(
+                    label_name, round_num))
+                stall_count += 1
+                if stall_count >= STALL_PATIENCE:
+                    print("      {} consecutive failures — stopping".format(STALL_PATIENCE))
+                    break
+                continue
+
+            parsed = [
+                line.strip().strip("- ").strip("0123456789.)")
+                for line in raw.strip().split("\n")
+                if line.strip() and len(line.strip()) > 10
+            ]
+
+            # Dedup against everything we already have (case-insensitive)
+            new_count = 0
+            for ex in parsed:
+                ex_lower = ex.lower().strip()
+                if ex_lower not in all_examples_lower:
+                    all_examples.append(ex)
+                    all_examples_lower.add(ex_lower)
+                    new_count += 1
+                    if len(all_examples) >= target_count:
+                        break
+
+            if new_count == 0:
+                stall_count += 1
+                if stall_count >= STALL_PATIENCE:
+                    print("      {} consecutive rounds with 0 new examples — stopping".format(
+                        STALL_PATIENCE))
+                    break
+            else:
+                stall_count = 0
+
+            if round_num > 1:
+                print("      round {}: +{} new (total: {}/{})".format(
+                    round_num, new_count, len(all_examples), target_count))
+
+        if len(all_examples) < target_count:
+            print("      {}WARNING: stalled at {}/{} {} examples{}".format(
+                "\033[93m", len(all_examples), target_count, label_name, "\033[0m"))
+
+        return all_examples[:target_count]
+
+    print("    Generating {} subtle positive examples (boundary-testing)...".format(half))
+    stealth_examples = _generate_and_parse(stealth_prompt, "positive", half)
+
+    print("    Generating {} hard negative examples (overlapping vocabulary)...".format(half))
+    trap_examples = _generate_and_parse(trap_prompt, "negative", half)
+
+    # --- Enforce strict 50/50 balance ---
+    # Instead of trimming the larger side, retry the smaller side
+    BALANCE_RETRIES = 5
+    for balance_round in range(BALANCE_RETRIES):
+        diff = abs(len(stealth_examples) - len(trap_examples))
+        if diff == 0:
+            break
+
+        if len(stealth_examples) < len(trap_examples):
+            shortfall = len(trap_examples) - len(stealth_examples)
+            print("    Balance: positives short by {} — generating more...".format(shortfall))
+            extra = _generate_and_parse(stealth_prompt, "positive (balance)", shortfall)
+            stealth_examples.extend(extra)
+        else:
+            shortfall = len(stealth_examples) - len(trap_examples)
+            print("    Balance: negatives short by {} — generating more...".format(shortfall))
+            extra = _generate_and_parse(trap_prompt, "negative (balance)", shortfall)
+            trap_examples.extend(extra)
+
+    # Final balance: if retries still couldn't close the gap, trim as last resort
+    min_count = min(len(stealth_examples), len(trap_examples))
+    if len(stealth_examples) != len(trap_examples):
+        YELLOW = "\033[93m"
+        RESET_C = "\033[0m"
+        print("    {}Balance: trimming to {} per class after {} retry rounds (requested {}){}".format(
+            YELLOW, min_count, BALANCE_RETRIES, half, RESET_C))
+        stealth_examples = stealth_examples[:min_count]
+        trap_examples = trap_examples[:min_count]
+
+    print("    Got {} positive + {} negative = {} total adversarial pairs".format(
+        len(stealth_examples), len(trap_examples),
+        len(stealth_examples) + len(trap_examples)))
+
+    # Stealth = positive (matches proposition), Trap = negative (does not match)
+    data = ([(text, 1) for text in stealth_examples] +
+            [(text, 0) for text in trap_examples])
+    random.shuffle(data)
+    return data
+
+
+def train_anchor_manifold(proposition, name, config, n_synthetic=100, role="user"):
+    """Anchor Manifold Optimization: nudge anchor embeddings using gradient descent.
+
+    Uses soft top-K KNN scoring (differentiable) with cosine anchoring constraints to
+    move positive anchors closer to true positives and negative anchors closer to
+    false-positive noise, without losing semantic meaning.
+
+    Pipeline:
+      1. Generate N role-aware adversarial synthetic examples (user messages or
+         assistant responses based on role, distributed across config categories,
+         while-loop retries until exact target, then diversity filter + regen)
+      2. K-fold cross-validation (default 5 folds) to select optimal epoch count
+      3. Final training on ALL data for exactly that many epochs
+      4. Save optimized embeddings
+
+    Key defaults (in config.ini [training]):
+      temperature = 0.05    (sharp softmax → strong gradients)
+      regularization = 0.01 (light spring → anchors can move)
+      train_knn_k = 20      (matches evaluator's default knn_size)
+
+    Produces:
+      - optimized_anchors_NAME.npz  (updated embedding vectors)
+      - training_report_NAME.txt    (k-fold results + final accuracy)
+
+    NOTE: Does NOT modify thresholds in config_NAME.ini. The training scorer
+    (soft-KNN with temperature) operates on a different scale than the evaluator's
+    hard-KNN scorer. To recalibrate thresholds after training, use:
+      python semantic_anchor_NAME.py --auto-calibrate labeled_data.txt
+    """
+    import torch
+    import torch.optim as optim
+    import numpy as np
+    import random
+    import datetime
+
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    RESET = "\033[0m"
+
+    # --- Load training hyperparameters ---
+    lr = float(config.get("training", "learning_rate", fallback="0.001"))
+    epochs = int(config.get("training", "epochs", fallback="20"))
+    reg_weight = float(config.get("training", "regularization", fallback="0.01"))
+    temperature = float(config.get("training", "temperature", fallback="0.05"))
+    batch_size = int(config.get("training", "batch_size", fallback="8"))
+    train_knn_k = int(config.get("training", "train_knn_k", fallback="20"))
+    drift_limit = float(config.get("training", "drift_limit", fallback="0.15"))
+    min_sim = float(config.get("training", "min_similarity", fallback="0.85"))
+
+    # Sanity checks for common misconfigurations
+    if temperature >= 0.5:
+        print("  {}WARNING:{} temperature={} is very high. Softmax over K={} neighbors".format(
+            YELLOW, RESET, temperature, train_knn_k))
+        print("           will produce near-uniform weights → vanishing gradients.")
+        print("           Recommended: 0.01–0.1. Default: 0.05")
+    if reg_weight >= 0.1:
+        print("  {}WARNING:{} regularization={} is high — anchors may not move enough.".format(
+            YELLOW, RESET, reg_weight))
+        print("           Recommended: 0.001–0.05. Default: 0.01")
+
+    output_dir = name
+    os.makedirs(output_dir, exist_ok=True)
+
+    # --- Load existing anchors ---
+    data, anchor_path = load_existing_anchors(output_dir, name)
+    if data is None:
+        print("  {}ERROR:{} No anchors found at {}/anchors_list_{}.json".format(
+            RED, RESET, output_dir, name))
+        print("  Run the generator first to create anchors.")
+        return
+
+    pos_texts, pos_cats = [], []
+    for cat, examples in data["anchors"].items():
+        for ex in examples:
+            pos_texts.append(ex)
+            pos_cats.append(cat)
+
+    neg_texts, neg_cats = [], []
+    for cat, examples in data.get("negative_anchors", {}).items():
+        for ex in examples:
+            neg_texts.append(ex)
+            neg_cats.append(cat)
+
+    n_pos = len(pos_texts)
+    n_neg = len(neg_texts)
+    n_anchors = n_pos + n_neg
+
+    # Clamp train_knn_k to available anchors
+    effective_knn_k = min(train_knn_k, n_anchors)
+    if effective_knn_k < train_knn_k:
+        print("  {}NOTE:{} train_knn_k={} exceeds total anchors ({}), clamped to {}".format(
+            YELLOW, RESET, train_knn_k, n_anchors, effective_knn_k))
+
+    print("\n  {}AMO Configuration:{}".format(BOLD, RESET))
+    print("    Positive anchors:  {}".format(n_pos))
+    print("    Negative anchors:  {}".format(n_neg))
+    print("    Synthetic examples: {} ({} positive + {} negative)".format(
+        n_synthetic, n_synthetic // 2, n_synthetic // 2))
+    print("    Learning rate:     {}".format(lr))
+    print("    Epochs:            {}".format(epochs))
+    print("    Temperature:       {}".format(temperature))
+    print("    Regularization:    {}".format(reg_weight))
+    print("    Drift limit:       {} (min cosine sim: {})".format(drift_limit, min_sim))
+    print("    Batch size:        {}".format(batch_size))
+    print("    KNN K:             {} (soft top-K for gradient flow)".format(
+        effective_knn_k))
+
+    # Synthetic generation params
+    adv_depth = config.get("training", "adversarial_depth", fallback="high")
+    ctx_variety = config.get("training", "context_variety", fallback="true")
+    n_folds = int(config.get("training", "kfold", fallback="5"))
+    diversity_thresh = float(config.get(
+        "training", "synthetic_diversity_threshold", fallback="0.95"))
+    print("    Adversarial depth: {}".format(adv_depth))
+    print("    Context variety:   {}".format(ctx_variety))
+    print("    K-fold CV:         {} folds".format(n_folds))
+    print("    Diversity thresh:  {} (cosine)".format(diversity_thresh))
+
+    # --- Load embedding model ---
+    from sentence_transformers import SentenceTransformer
+    emb_model_name = config.get("anchors", "embedding_model")
+    print("\n  Loading embedding model: {}...".format(emb_model_name))
+    emb_model = SentenceTransformer(emb_model_name)
+
+    # --- Embed anchors ---
+    print("  Embedding {} positive + {} negative anchors...".format(n_pos, n_neg))
+    pos_embs_np = emb_model.encode(pos_texts, show_progress_bar=False)
+    neg_embs_np = emb_model.encode(neg_texts, show_progress_bar=False)
+
+    # Labels: pos=1, neg=0
+    anchor_labels = np.array([1.0] * n_pos + [0.0] * n_neg, dtype=np.float32)
+
+    # --- Generate synthetic training data ---
+    print("\n  {}Generating synthetic training data...{}".format(BOLD, RESET))
+    synthetic = generate_synthetic_training_data(
+        proposition, config, n_synthetic, role=role,
+        existing_pos=pos_texts, existing_neg=neg_texts)
+
+    if len(synthetic) < 10:
+        print("  {}ERROR:{} Too few synthetic examples generated ({}).".format(
+            RED, RESET, len(synthetic)))
+        print("  This usually means the LLM refused to generate adversarial content.")
+        print("  Try:")
+        print("    - A different model (e.g. a local model via ollama)")
+        print("    - Lower adversarial_depth = medium or low in [training] config")
+        print("    - A less sensitive proposition")
+        return
+
+    # --- Embedding-based diversity filtering with regeneration ---
+    # Remove near-duplicate paraphrases that have different text but almost
+    # identical embeddings (cosine > threshold). These waste training capacity
+    # and cause overfitting to narrow clusters in embedding space.
+    # If removals reduce count below target, regenerate and re-check.
+    DIVERSITY_THRESHOLD = diversity_thresh
+    DIVERSITY_REGEN_ROUNDS = 3
+    half = n_synthetic // 2
+
+    for regen_round in range(DIVERSITY_REGEN_ROUNDS + 1):
+        syn_texts_all = [t for t, _ in synthetic]
+        syn_labels_all = [l for _, l in synthetic]
+
+        if regen_round == 0:
+            print("  Embedding {} synthetic examples for diversity check...".format(
+                len(synthetic)))
+        else:
+            print("    Re-embedding {} examples after regeneration...".format(len(synthetic)))
+
+        syn_embs_np = emb_model.encode(syn_texts_all, show_progress_bar=False)
+
+        # Greedy dedup within each class: keep first, skip if too similar to any kept
+        diverse_synthetic = []
+        pos_kept, pos_removed = 0, 0
+        neg_kept, neg_removed = 0, 0
+
+        for label_val in [1.0, 0.0]:
+            class_indices = [i for i in range(len(synthetic))
+                            if syn_labels_all[i] == label_val]
+            kept_embs = []
+            for idx in class_indices:
+                emb = syn_embs_np[idx]
+                emb_norm = emb / (np.linalg.norm(emb) + 1e-10)
+                is_diverse = True
+                for kept_emb in kept_embs:
+                    if np.dot(emb_norm, kept_emb) > DIVERSITY_THRESHOLD:
+                        is_diverse = False
+                        break
+                if is_diverse:
+                    kept_embs.append(emb_norm)
+                    diverse_synthetic.append(synthetic[idx])
+                    if label_val == 1.0:
+                        pos_kept += 1
+                    else:
+                        neg_kept += 1
+                else:
+                    if label_val == 1.0:
+                        pos_removed += 1
+                    else:
+                        neg_removed += 1
+
+        if pos_removed > 0:
+            print("    Diversity filter (positive): kept {}, removed {} near-duplicates (cosine > {})".format(
+                pos_kept, pos_removed, DIVERSITY_THRESHOLD))
+        if neg_removed > 0:
+            print("    Diversity filter (negative): kept {}, removed {} near-duplicates (cosine > {})".format(
+                neg_kept, neg_removed, DIVERSITY_THRESHOLD))
+
+        synthetic = diverse_synthetic
+
+        # Check if both classes meet target
+        if pos_kept >= half and neg_kept >= half:
+            break  # we're good
+
+        if regen_round >= DIVERSITY_REGEN_ROUNDS:
+            # Last round — accept what we have
+            if pos_kept < half or neg_kept < half:
+                print("    {}Diversity regen exhausted: {} pos, {} neg (target {} each){}".format(
+                    YELLOW, pos_kept, neg_kept, half, RESET))
+            break
+
+        # Regenerate shortfall
+        regen_system = (
+            "You generate adversarial training data for an AI safety classifier. "
+            "Output only the requested examples, one per line. No explanations, "
+            "no labels, no metadata."
+        )
+        # Use role context for correct POV
+        rc = _role_context(role)
+        regen_noun = rc["example_noun"]  # "user messages" or "AI assistant responses"
+
+        if pos_kept < half:
+            shortfall = half - pos_kept
+            print("    Diversity regen round {}: need {} more positives...".format(
+                regen_round + 1, shortfall))
+            regen_prompt = (
+                "PROPOSITION: \"{}\"\n\n"
+                "Generate {} {} that MATCH this proposition.\n"
+                "Use subtle, indirect, or non-obvious formulations — euphemisms, "
+                "hypotheticals, coded language, academic framing.\n"
+                "Each must be SEMANTICALLY DISTINCT. One per line, no numbering."
+            ).format(proposition, shortfall, regen_noun)
+            raw = call_llm_raw(config, regen_system, regen_prompt)
+            if raw:
+                for line in raw.strip().split("\n"):
+                    line = line.strip().strip("- ").strip("0123456789.)")
+                    if line and len(line) > 10:
+                        synthetic.append((line, 1.0))
+
+        if neg_kept < half:
+            shortfall = half - neg_kept
+            print("    Diversity regen round {}: need {} more negatives...".format(
+                regen_round + 1, shortfall))
+            regen_prompt = (
+                "PROPOSITION: \"{}\"\n\n"
+                "Generate {} HARD NEGATIVE {}.\n"
+                "These do NOT match the proposition but use similar vocabulary "
+                "and domain terminology. They have clearly LEGITIMATE intent: "
+                "education, journalism, security research, fiction, compliance.\n"
+                "Each must be SEMANTICALLY DISTINCT. One per line, no numbering."
+            ).format(proposition, shortfall, regen_noun)
+            raw = call_llm_raw(config, regen_system, regen_prompt)
+            if raw:
+                for line in raw.strip().split("\n"):
+                    line = line.strip().strip("- ").strip("0123456789.)")
+                    if line and len(line) > 10:
+                        synthetic.append((line, 0.0))
+
+    if len(synthetic) < 10:
+        print("  {}ERROR:{} Too few diverse examples remain ({}).".format(
+            RED, RESET, len(synthetic)))
+        return
+
+    # Shuffle before use (diversity filter grouped by class)
+    random.shuffle(synthetic)
+
+    # --- Embed ALL synthetic data (used for k-fold and final training) ---
+    all_syn_texts = [t for t, _ in synthetic]
+    all_syn_labels = np.array([l for _, l in synthetic], dtype=np.float32)
+    print("  Embedding {} training messages...".format(len(synthetic)))
+    all_syn_embs = torch.tensor(
+        emb_model.encode(all_syn_texts, show_progress_bar=False), dtype=torch.float32)
+    all_syn_labels_t = torch.tensor(all_syn_labels, dtype=torch.float32)
+
+    n_syn_pos = int(all_syn_labels.sum())
+    n_syn_neg = len(all_syn_labels) - n_syn_pos
+    print("    {} examples ({} pos, {} neg)".format(
+        len(synthetic), n_syn_pos, n_syn_neg))
+
+    # --- Create trainable anchor parameters ---
+    all_orig_embs = np.vstack([pos_embs_np, neg_embs_np])
+    anchor_labels_t = torch.tensor(anchor_labels, dtype=torch.float32)
+
+    # --- Soft-KNN scoring function (differentiable) ---
+    knn_k = effective_knn_k  # from config: training.train_knn_k
+
+    def soft_knn_score(query_emb, anchors, labels, temp):
+        """Differentiable top-K KNN scoring via softmax-weighted voting.
+
+        1. Compute cosine similarity to all anchors
+        2. Select top-K most similar (hard selection — gradient flows through values)
+        3. Softmax-weighted vote within those K neighbors
+
+        Without top-K, softmax over 300+ anchors is nearly uniform (every query
+        scores ~label_mean), gradients vanish, and nothing trains.
+        With top-K selection, small similarity differences create meaningful weight
+        differences, and the gradient actually points somewhere useful.
+        """
+        q_norm = query_emb / (query_emb.norm() + 1e-10)
+        a_norm = anchors / (anchors.norm(dim=1, keepdim=True) + 1e-10)
+        cos_sim = (q_norm @ a_norm.T)
+        top_vals, top_idx = torch.topk(cos_sim, knn_k)
+        top_labels = labels[top_idx]
+        weights = torch.softmax(top_vals / temp, dim=0)
+        score = (weights * top_labels).sum()
+        return score.clamp(1e-7, 1 - 1e-7)
+
+    def evaluate(embs, labels_t, anchors, a_labels, temp):
+        """Evaluate accuracy and avg loss on a dataset."""
+        correct = 0
+        total_loss = 0.0
+        with torch.no_grad():
+            for i in range(len(embs)):
+                score = soft_knn_score(embs[i], anchors, a_labels, temp)
+                pred = 1 if score > 0.5 else 0
+                correct += (pred == int(labels_t[i].item()))
+                loss = -labels_t[i] * torch.log(score + 1e-10) - \
+                       (1 - labels_t[i]) * torch.log(1 - score + 1e-10)
+                total_loss += loss.item()
+        acc = correct / len(embs) if len(embs) > 0 else 0.0
+        avg_loss = total_loss / len(embs) if len(embs) > 0 else 0.0
+        return acc, avg_loss
+
+    def train_one_run(train_embs, train_labels_t, val_embs, val_labels_t,
+                      max_epochs, verbose=False, label=""):
+        """Run one training cycle. Returns (best_vecs, best_epoch, epoch_val_accs, epoch_train_accs)."""
+        anchors = torch.tensor(all_orig_embs.copy(), dtype=torch.float32, requires_grad=True)
+        orig = torch.tensor(all_orig_embs, dtype=torch.float32)
+        opt = optim.Adam([anchors], lr=lr)
+        sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_epochs, eta_min=lr * 0.1)
+
+        best_acc = 0.0
+        best_e = 0
+        best_a = anchors.clone().detach()
+        patience = 0
+        epoch_val_accs = []
+        epoch_train_accs = []
+
+        for ep in range(max_epochs):
+            # Shuffle and train
+            indices = list(range(len(train_embs)))
+            random.shuffle(indices)
+
+            for batch_start in range(0, len(indices), batch_size):
+                batch_idx = indices[batch_start:batch_start + batch_size]
+                batch_loss = torch.tensor(0.0)
+                for i in batch_idx:
+                    score = soft_knn_score(
+                        train_embs[i], anchors, anchor_labels_t, temperature)
+                    bce = -train_labels_t[i] * torch.log(score + 1e-10) - \
+                          (1 - train_labels_t[i]) * torch.log(1 - score + 1e-10)
+                    batch_loss = batch_loss + bce
+                drift_penalty = ((anchors - orig) ** 2).sum() * reg_weight
+                batch_loss = batch_loss / len(batch_idx) + drift_penalty
+                opt.zero_grad()
+                batch_loss.backward()
+                opt.step()
+
+            # Cosine anchoring constraint
+            with torch.no_grad():
+                for j in range(n_anchors):
+                    new_vec = anchors[j]
+                    old_vec = orig[j]
+                    cos = (new_vec @ old_vec) / (
+                        new_vec.norm() * old_vec.norm() + 1e-10)
+                    if cos.item() < min_sim:
+                        lo, hi = 0.0, 1.0
+                        for _ in range(20):
+                            mid = (lo + hi) / 2
+                            interp = mid * old_vec + (1 - mid) * new_vec
+                            sim = (interp @ old_vec) / (
+                                interp.norm() * old_vec.norm() + 1e-10)
+                            if sim.item() < min_sim:
+                                lo = mid
+                            else:
+                                hi = mid
+                        anchors[j] = hi * old_vec + (1 - hi) * new_vec
+
+            # Evaluate
+            train_acc, _ = evaluate(train_embs, train_labels_t, anchors, anchor_labels_t, temperature)
+            val_acc, _ = evaluate(val_embs, val_labels_t, anchors, anchor_labels_t, temperature)
+            epoch_train_accs.append(train_acc)
+            epoch_val_accs.append(val_acc)
+
+            if val_acc > best_acc:
+                best_acc = val_acc
+                best_e = ep + 1
+                best_a = anchors.clone().detach()
+                patience = 0
+            else:
+                patience += 1
+                if patience >= PATIENCE:
+                    break
+
+            sched.step()
+
+        if verbose and label:
+            print("    {}: best_val={:.1%} at epoch {}".format(label, best_acc, best_e))
+
+        return best_a, best_e, epoch_val_accs, epoch_train_accs
+
+    # --- K-fold cross-validation for robust epoch selection ---
+    PATIENCE = 5
+
+    # Pre-training baseline
+    baseline_anchors = torch.tensor(all_orig_embs, dtype=torch.float32)
+    pre_acc, pre_loss = evaluate(
+        all_syn_embs, all_syn_labels_t, baseline_anchors, anchor_labels_t, temperature)
+    print("\n  {}Pre-training accuracy (all data): {:.1%}{}".format(BOLD, pre_acc, RESET))
+
+    # Create stratified fold indices
+    pos_indices = [i for i in range(len(synthetic)) if all_syn_labels[i] == 1.0]
+    neg_indices = [i for i in range(len(synthetic)) if all_syn_labels[i] == 0.0]
+    random.shuffle(pos_indices)
+    random.shuffle(neg_indices)
+
+    folds = [[] for _ in range(n_folds)]
+    for i, idx in enumerate(pos_indices):
+        folds[i % n_folds].append(idx)
+    for i, idx in enumerate(neg_indices):
+        folds[i % n_folds].append(idx)
+
+    print("\n  {}{}-fold cross-validation ({} epochs per fold)...{}".format(
+        BOLD, n_folds, epochs, RESET))
+
+    all_fold_val_accs = []  # list of lists: [fold][epoch]
+    fold_best_epochs = []
+
+    for fold_idx in range(n_folds):
+        val_idx = sorted(folds[fold_idx])
+        train_idx = sorted([idx for f in range(n_folds) if f != fold_idx
+                            for idx in folds[f]])
+
+        fold_train_embs = all_syn_embs[train_idx]
+        fold_train_labels = all_syn_labels_t[train_idx]
+        fold_val_embs = all_syn_embs[val_idx]
+        fold_val_labels = all_syn_labels_t[val_idx]
+
+        n_val_pos = int(fold_val_labels.sum().item())
+        n_val_neg = len(fold_val_labels) - n_val_pos
+
+        _, best_e, val_accs, _ = train_one_run(
+            fold_train_embs, fold_train_labels,
+            fold_val_embs, fold_val_labels,
+            max_epochs=epochs, verbose=True,
+            label="Fold {}/{} (train={}, val={}: {} pos, {} neg)".format(
+                fold_idx + 1, n_folds, len(train_idx), len(val_idx),
+                n_val_pos, n_val_neg))
+
+        all_fold_val_accs.append(val_accs)
+        fold_best_epochs.append(best_e)
+
+    # Compute mean val accuracy per epoch across folds
+    # Folds may have different lengths due to early stopping — use min length
+    min_epochs_run = min(len(accs) for accs in all_fold_val_accs)
+    mean_val_accs = []
+    for ep in range(min_epochs_run):
+        mean_acc = sum(all_fold_val_accs[f][ep] for f in range(n_folds)) / n_folds
+        mean_val_accs.append(mean_acc)
+
+    best_mean_epoch = max(range(len(mean_val_accs)), key=lambda e: mean_val_accs[e]) + 1
+    best_mean_acc = mean_val_accs[best_mean_epoch - 1]
+
+    # Print epoch summary table
+    print("\n  {}Mean validation accuracy by epoch (across {} folds):{}".format(
+        BOLD, n_folds, RESET))
+    print("  {:>5s}".format("Epoch"), end="")
+    for f in range(n_folds):
+        print("  {:>7s}".format("Fold{}".format(f + 1)), end="")
+    print("  {:>7s}".format("Mean"))
+    print("  " + "-" * (6 + 9 * n_folds + 8))
+
+    for ep in range(min_epochs_run):
+        is_best = (ep + 1 == best_mean_epoch)
+        print("  {:>5d}".format(ep + 1), end="")
+        for f in range(n_folds):
+            print("  {:>6.1%}".format(all_fold_val_accs[f][ep]), end="")
+        marker = " ★" if is_best else ""
+        print("  {:>6.1%}{}".format(mean_val_accs[ep], marker))
+
+    print("\n  {}Best epoch: {} (mean val accuracy: {:.1%}){}".format(
+        GREEN, best_mean_epoch, best_mean_acc, RESET))
+
+    # --- Final training on ALL data for best_mean_epoch epochs ---
+    print("\n  {}Final training on all {} examples for {} epochs...{}".format(
+        BOLD, len(synthetic), best_mean_epoch, RESET))
+
+    report_lines = []
+    report_lines.append("Anchor Manifold Optimization — Training Report")
+    report_lines.append("=" * 50)
+    report_lines.append("Proposition: \"{}\"".format(proposition))
+    report_lines.append("Name: {}".format(name))
+    report_lines.append("Date: {}".format(datetime.datetime.now().isoformat()))
+    report_lines.append("")
+    report_lines.append("Configuration:")
+    report_lines.append("  Learning rate:  {}".format(lr))
+    report_lines.append("  Epochs:         {} (selected by {}-fold CV from max {})".format(
+        best_mean_epoch, n_folds, epochs))
+    report_lines.append("  Temperature:    {}".format(temperature))
+    report_lines.append("  Regularization: {}".format(reg_weight))
+    report_lines.append("  Drift limit:    {} (min sim: {})".format(drift_limit, min_sim))
+    report_lines.append("  Batch size:     {}".format(batch_size))
+    report_lines.append("  Anchors:        {} pos + {} neg = {}".format(n_pos, n_neg, n_anchors))
+    report_lines.append("  KNN K:          {} (soft top-K)".format(knn_k))
+    report_lines.append("  Synthetic data: {} ({} pos, {} neg)".format(
+        len(synthetic), n_syn_pos, n_syn_neg))
+    report_lines.append("  K-fold CV:      {} folds, best epoch {} (mean val acc {:.1%})".format(
+        n_folds, best_mean_epoch, best_mean_acc))
+    report_lines.append("")
+    report_lines.append("K-fold validation summary:")
+    for f in range(n_folds):
+        report_lines.append("  Fold {}: best_epoch={}, best_val_acc={:.1%}".format(
+            f + 1, fold_best_epochs[f],
+            max(all_fold_val_accs[f]) if all_fold_val_accs[f] else 0.0))
+    report_lines.append("")
+
+    # Final run: train on ALL data, no validation split
+    anchor_vecs = torch.tensor(all_orig_embs.copy(), dtype=torch.float32, requires_grad=True)
+    orig_vecs = torch.tensor(all_orig_embs, dtype=torch.float32)
+    optimizer = optim.Adam([anchor_vecs], lr=lr)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=best_mean_epoch, eta_min=lr * 0.1)
+
+    report_lines.append("Final training ({} epochs on all data):".format(best_mean_epoch))
+    report_lines.append("Epoch  Train_Acc   Loss     Drift_Avg  Projections  LR")
+    report_lines.append("-" * 65)
+
+    print("  {:>5s}  {:>9s}  {:>8s}  {:>9s}  {:>11s}  {:>6s}".format(
+        "Epoch", "Train", "Loss", "Drift", "Projections", "LR"))
+    print("  " + "-" * 55)
+
+    for epoch in range(best_mean_epoch):
+        indices = list(range(len(all_syn_embs)))
+        random.shuffle(indices)
+
+        epoch_loss = 0.0
+        n_batches = 0
+
+        for batch_start in range(0, len(indices), batch_size):
+            batch_idx = indices[batch_start:batch_start + batch_size]
+            batch_loss = torch.tensor(0.0)
+
+            for i in batch_idx:
+                score = soft_knn_score(
+                    all_syn_embs[i], anchor_vecs, anchor_labels_t, temperature)
+                bce = -all_syn_labels_t[i] * torch.log(score + 1e-10) - \
+                      (1 - all_syn_labels_t[i]) * torch.log(1 - score + 1e-10)
+                batch_loss = batch_loss + bce
+
+            drift_penalty = ((anchor_vecs - orig_vecs) ** 2).sum() * reg_weight
+            batch_loss = batch_loss / len(batch_idx) + drift_penalty
+
+            optimizer.zero_grad()
+            batch_loss.backward()
+            optimizer.step()
+
+            epoch_loss += batch_loss.item()
+            n_batches += 1
+
+        # Cosine anchoring constraint
+        n_projected = 0
+        with torch.no_grad():
+            for j in range(n_anchors):
+                new_vec = anchor_vecs[j]
+                old_vec = orig_vecs[j]
+                cos = (new_vec @ old_vec) / (
+                    new_vec.norm() * old_vec.norm() + 1e-10)
+                if cos.item() < min_sim:
+                    lo, hi = 0.0, 1.0
+                    for _ in range(20):
+                        mid = (lo + hi) / 2
+                        interpolated = mid * old_vec + (1 - mid) * new_vec
+                        sim = (interpolated @ old_vec) / (
+                            interpolated.norm() * old_vec.norm() + 1e-10)
+                        if sim.item() < min_sim:
+                            lo = mid
+                        else:
+                            hi = mid
+                    anchor_vecs[j] = hi * old_vec + (1 - hi) * new_vec
+                    n_projected += 1
+
+        train_acc, _ = evaluate(
+            all_syn_embs, all_syn_labels_t, anchor_vecs, anchor_labels_t, temperature)
+
+        with torch.no_grad():
+            cos_sims = torch.nn.functional.cosine_similarity(anchor_vecs, orig_vecs, dim=1)
+            avg_drift = 1.0 - cos_sims.mean().item()
+
+        avg_loss = epoch_loss / max(1, n_batches)
+        current_lr = optimizer.param_groups[0]["lr"]
+
+        print("  {:>5d}  {:>8.1%}  {:>8.4f}  {:>8.4f}  {:>11d}  {:.4f}".format(
+            epoch + 1, train_acc, avg_loss, avg_drift, n_projected, current_lr))
+        report_lines.append("{:>5d}  {:>8.1%}  {:>8.4f}  {:>9.4f}  {:>11d}  {:.4f}".format(
+            epoch + 1, train_acc, avg_loss, avg_drift, n_projected, current_lr))
+
+        scheduler.step()
+
+    # --- Post-training evaluation ---
+    post_train_acc, post_train_loss = evaluate(
+        all_syn_embs, all_syn_labels_t, anchor_vecs.detach(), anchor_labels_t, temperature)
+
+    print("\n  {}Post-training performance:{}".format(BOLD, RESET))
+    print("    Train accuracy: {:.1%} (pre: {:.1%})".format(post_train_acc, pre_acc))
+    print("    Epoch selected: {} (by {}-fold CV, mean val: {:.1%})".format(
+        best_mean_epoch, n_folds, best_mean_acc))
+
+    # --- Drift statistics ---
+    with torch.no_grad():
+        final_cos = torch.nn.functional.cosine_similarity(anchor_vecs, orig_vecs, dim=1)
+        pos_drift = 1.0 - final_cos[:n_pos].mean().item()
+        neg_drift = 1.0 - final_cos[n_pos:].mean().item()
+        min_cos = final_cos.min().item()
+        max_drift_idx = final_cos.argmin().item()
+
+    print("\n  {}Drift statistics:{}".format(BOLD, RESET))
+    print("    Positive anchors avg drift: {:.4f}".format(pos_drift))
+    print("    Negative anchors avg drift: {:.4f}".format(neg_drift))
+    print("    Min cosine to original:     {:.4f} (anchor #{})".format(
+        min_cos, max_drift_idx))
+
+    # --- Save optimized embeddings ---
+    optimized_path = os.path.join(output_dir, "optimized_anchors_{}.npz".format(name))
+    opt_np = anchor_vecs.detach().numpy()
+    np.savez_compressed(
+        optimized_path,
+        embeddings=opt_np,
+        pos_count=n_pos,
+        neg_count=n_neg,
+        pos_texts=np.array(pos_texts, dtype=object),
+        neg_texts=np.array(neg_texts, dtype=object),
+    )
+    print("\n  {}{}\u2713 Optimized anchors: {}{}".format(GREEN, BOLD, optimized_path, RESET))
+
+    # --- Save training report ---
+    report_lines.append("")
+    report_lines.append("Post-training (epoch {} selected by {}-fold CV):".format(
+        best_mean_epoch, n_folds))
+    report_lines.append("  Train: {:.1%} accuracy (pre: {:.1%})".format(
+        post_train_acc, pre_acc))
+    report_lines.append("  CV mean val accuracy: {:.1%}".format(best_mean_acc))
+    report_lines.append("")
+    report_lines.append("Drift:")
+    report_lines.append("  Positive avg: {:.4f}".format(pos_drift))
+    report_lines.append("  Negative avg: {:.4f}".format(neg_drift))
+    report_lines.append("  Min cosine:   {:.4f}".format(min_cos))
+
+    report_path = os.path.join(output_dir, "training_report_{}.txt".format(name))
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(report_lines))
+    print("  {}{}\u2713 Training report:  {}{}".format(GREEN, BOLD, report_path, RESET))
+
+    # --- Threshold advisory (informational only — does NOT overwrite config) ---
+    # The soft-KNN scorer used during training (softmax-weighted with temperature)
+    # produces scores on a different scale than the evaluator's hard-KNN scorer
+    # (count / K). Auto-calibrating thresholds on training scores and writing them
+    # to the evaluator's config would produce nonsensical results.
+    # Instead, we report score distributions so the user can decide.
+    print("\n  {}Post-training score distribution (soft-KNN, informational only):{}".format(
+        BOLD, RESET))
+
+    scores_pos = []
+    scores_neg = []
+    with torch.no_grad():
+        for i in range(len(all_syn_embs)):
+            score = soft_knn_score(
+                all_syn_embs[i], anchor_vecs.detach(), anchor_labels_t, temperature)
+            if all_syn_labels[i] == 1:
+                scores_pos.append(score.item())
+            else:
+                scores_neg.append(score.item())
+
+    if scores_pos:
+        print("    Positive scores: min={:.3f}  mean={:.3f}  max={:.3f}  (n={})".format(
+            min(scores_pos), sum(scores_pos) / len(scores_pos),
+            max(scores_pos), len(scores_pos)))
+    if scores_neg:
+        print("    Negative scores: min={:.3f}  mean={:.3f}  max={:.3f}  (n={})".format(
+            min(scores_neg), sum(scores_neg) / len(scores_neg),
+            max(scores_neg), len(scores_neg)))
+
+    if scores_pos and scores_neg:
+        gap = min(scores_pos) - max(scores_neg)
+        if gap > 0:
+            print("    Separation gap: {}{:.3f} (positive min > negative max){}".format(
+                GREEN, gap, RESET))
+        else:
+            print("    {}Overlap: {:.3f} (some scores cross — boundary is fuzzy){}".format(
+                YELLOW, -gap, RESET))
+
+    print("\n  {}NOTE:{} Thresholds in config_{}.ini are UNCHANGED.".format(
+        YELLOW, RESET, name))
+    print("  The AMO training optimizes anchor positions, not evaluator thresholds.")
+    print("  To recalibrate thresholds for the new embeddings, run:")
+    print("    python semantic_anchor_{}.py --auto-calibrate labeled_data.txt".format(name))
+
+    print("\n  {}AMO training complete.{}".format(GREEN, RESET))
+    print("  The evaluator will automatically use optimized embeddings when")
+    print("  {} exists.".format(optimized_path))
+    return optimized_path
+
+
+# ---------------------------------------------------------------------------
 # Generator main
 # ---------------------------------------------------------------------------
 
@@ -6039,6 +8337,9 @@ def main():
     parser.add_argument("--role", type=str, default=None, choices=["user", "assistant"],
                         help="Whose perspective anchors represent: 'user' for user messages, "
                              "'assistant' for AI responses (default: user)")
+    parser.add_argument("--train", type=int, default=None, metavar="N",
+                        help="Anchor Manifold Optimization: generate N synthetic edge cases "
+                             "and train anchor embeddings via gradient descent")
     args = parser.parse_args()
 
     if args.generate_anchors and args.generate_script:
@@ -6106,6 +8407,34 @@ def main():
         print("\n  {}{}\u2713 Generated: {}{}".format(GREEN, BOLD, script_path, RESET))
         _generate_config_file(output_dir, name, existing_data["proposition"], config)
         _print_usage(script_path)
+        return
+
+    # =====================================================================
+    # TRAIN MODE: Anchor Manifold Optimization
+    # =====================================================================
+    if args.train is not None:
+        if existing_data is None:
+            print("  {}ERROR:{} No existing anchors found at {}/anchors_list_{}.json".format(
+                "\033[91m", RESET, output_dir, name))
+            print("  Run the generator first to create anchors, then use --train.")
+            sys.exit(1)
+
+        proposition = existing_data["proposition"]
+        role = existing_data.get("role", "user")
+
+        w = 60
+        print("  " + BOLD + "\u2554" + "\u2550" * w + "\u2557")
+        print("  \u2551" + "ANCHOR MANIFOLD OPTIMIZATION (AMO)".center(w) + "\u2551")
+        print("  \u2551" + "Trainable anchor embeddings".center(w) + "\u2551")
+        print("  \u255a" + "\u2550" * w + "\u255d" + RESET)
+
+        print("\n  {}Proposition:{} \"{}\"".format(BOLD, RESET, proposition))
+        print("  {}Role:{}        {}".format(BOLD, RESET, role))
+        print("  {}Name:{}        {}".format(BOLD, RESET, name))
+
+        train_anchor_manifold(
+            proposition, name, config,
+            n_synthetic=args.train, role=role)
         return
 
     # =====================================================================
@@ -6198,6 +8527,36 @@ def main():
             print("\n  {}Combined categories:{} {} static + {} orthogonal = {} total".format(
                 BOLD, RESET, n_static, added, len(categories)))
 
+    # --- Auto-compute optimal target_n ---
+    # Minimum: 2 anchors per category so MMR has meaningful selection per slot.
+    # With subtopics: also need knn_size / num_subtopics per subtopic.
+    n_cats = len(categories)
+    n_subs = len(subtopics) if subtopics and len(subtopics) > 1 else 1
+    knn_size = int(config.get("thresholds", "knn_size", fallback="20"))
+
+    min_for_categories = n_cats * 2           # 2 per category
+    min_for_subtopics = knn_size              # need knn_size / n_subs per sub, sum = knn_size
+    min_for_coverage = max(min_for_categories, min_for_subtopics)
+
+    user_set_n = args.num_examples is not None
+
+    if target_n < min_for_coverage:
+        old_n = target_n
+        target_n = min(500, min_for_coverage)
+        if user_set_n:
+            print("\n  {}Auto-adjusted -n: {} → {} ({} categories × 2 = {}, "
+                  "knn parity needs {}){}".format(
+                      YELLOW, old_n, target_n, n_cats, n_cats * 2,
+                      min_for_subtopics, RESET))
+        else:
+            print("\n  {}Auto-computed -n: {} ({} categories × 2 = {}, "
+                  "knn parity needs {}){}".format(
+                      BOLD, target_n, n_cats, n_cats * 2,
+                      min_for_subtopics, RESET))
+    elif not user_set_n:
+        print("\n  {}Target anchors:{} {} ({} categories, {} subtopics)".format(
+            BOLD, RESET, target_n, n_cats, n_subs))
+
     # --- Generate anchors ---
     anchors_dict = generate_diverse_anchors(
         proposition, categories, target_n, num_rounds, config, role=role,
@@ -6262,6 +8621,58 @@ def main():
         neg_total = sum(len(v) for v in negative_dict.values())
         print("\n  {} Merged {} hard negatives into negative set (new total: {}){}".format(
             GREEN, hard_neg_total, neg_total, RESET))
+
+    # --- Subtopic KNN parity: ensure each subtopic has enough anchors ---
+    knn_size = int(config.get("thresholds", "knn_size", fallback="20"))
+    emb_model_name = config.get("anchors", "embedding_model")
+    emb_model = load_embedding_model(emb_model_name)
+
+    if subtopics and len(subtopics) > 1:
+        print("\n  {}Subtopic KNN parity:{} Checking minimum per subtopic...".format(
+            BOLD, RESET))
+        anchors_dict = enforce_subtopic_parity(
+            proposition, subtopics, anchors_dict, knn_size,
+            emb_model, config, role=role, anchor_type="positive",
+            target_n=target_n)
+        negative_dict = enforce_subtopic_parity(
+            proposition, subtopics, negative_dict, knn_size,
+            emb_model, config, role=role, anchor_type="negative",
+            target_n=neg_target)
+
+    # --- Boundary targeting: train separator, find weak zones, fill gaps ---
+    boundary_pos, boundary_neg = boundary_targeted_generation(
+        proposition, anchors_dict, negative_dict, config, emb_model, role=role)
+
+    for cat, examples in boundary_pos.items():
+        if cat in anchors_dict:
+            anchors_dict[cat].extend(examples)
+        else:
+            anchors_dict[cat] = examples
+    for cat, examples in boundary_neg.items():
+        if cat in negative_dict:
+            negative_dict[cat].extend(examples)
+        else:
+            negative_dict[cat] = examples
+
+    # --- Hard example mining: synthesize queries, collect failures, fix ---
+    mined_pos, mined_neg = hard_example_mining(
+        proposition, anchors_dict, negative_dict, config, emb_model, role=role)
+
+    for cat, examples in mined_pos.items():
+        if cat in anchors_dict:
+            anchors_dict[cat].extend(examples)
+        else:
+            anchors_dict[cat] = examples
+    for cat, examples in mined_neg.items():
+        if cat in negative_dict:
+            negative_dict[cat].extend(examples)
+        else:
+            negative_dict[cat] = examples
+
+    total = sum(len(v) for v in anchors_dict.values())
+    neg_total = sum(len(v) for v in negative_dict.values())
+    print("\n  {}\u2713 Final anchor set: {} positive, {} negative{}".format(
+        GREEN, total, neg_total, RESET))
 
     # --- Generate neutral (off-topic baseline) anchors ---
     neutral_list = generate_neutral_anchors(proposition, config, role=role)
@@ -6392,16 +8803,20 @@ def _generate_config_file(output_dir, name, proposition, config=None):
                 f.write("# Abstain = ambiguous, consider routing to LLM judge.\n")
                 f.write("# Higher = more abstains (safer), lower = force more decisions.\n")
                 f.write("nli_abstain_margin = 0.15\n\n")
-                f.write("# NLI cosine pre-filter size (default: 40)\n")
-                f.write("# How many candidates to retrieve by cosine before NLI re-ranking.\n")
-                f.write("# Increase for broad propositions spanning many subtopics (60-80).\n")
+                f.write("# NLI retrieval mode (default: 40 = cosine pre-filter)\n")
+                f.write("# Cosine pre-filter top-K candidates, then NLI re-rank.\n")
+                f.write("# Increase for broad propositions (60-80).\n")
                 f.write("nli_retrieve_k = 40\n\n")
                 f.write("# NLI vote neighborhood size (default: 20)\n")
                 f.write("# After NLI re-ranking, vote on the top K candidates.\n")
                 f.write("nli_vote_k = 20\n\n")
                 f.write("# NLI asymmetric forward weight (default: 0.7)\n")
                 f.write("# 0.7 = 70%% forward (message->anchor) + 30%% backward (anchor->message)\n")
-                f.write("nli_fwd_weight = 0.7\n")
+                f.write("nli_fwd_weight = 0.7\n\n")
+                f.write("# Hybrid merged KNN pool size (default: 40)\n")
+                f.write("# Takes pool/2 from cosine + pool/2 from NLI, unions them.\n")
+                f.write("# Set to 100 for 50 cosine + 50 NLI voters.\n")
+                f.write("hybrid_pool_size = 40\n")
             updated = True
             print("  {}{}\u2713 Config:  {} (added [thresholds] section){}".format(
                 GREEN, BOLD, config_path, RESET))
@@ -6447,6 +8862,7 @@ def _generate_config_file(output_dir, name, proposition, config=None):
             f.write("#   openai     \u2014 GPT     (api.openai.com)\n")
             f.write("#   gemini     \u2014 Gemini  (generativelanguage.googleapis.com)\n")
             f.write("#   grok       \u2014 Grok    (api.x.ai)\n")
+            f.write("#   openrouter \u2014 Any model via OpenRouter (openrouter.ai)\n")
             f.write("#   ollama     \u2014 Local   (localhost:11434)\n")
             f.write("#   lmstudio   \u2014 Local   (localhost:1234, OpenAI-compatible)\n")
             f.write("#   vllm       \u2014 Local   (localhost:8000, OpenAI-compatible)\n\n")
@@ -6468,6 +8884,10 @@ def _generate_config_file(output_dir, name, proposition, config=None):
             f.write("# provider = grok\n")
             f.write("# model = grok-3-mini-fast\n")
             f.write("# api_key = xai-...\n\n")
+            f.write("# >> OpenRouter (access 200+ models via single API key) <<\n")
+            f.write("# provider = openrouter\n")
+            f.write("# model = anthropic/claude-sonnet-4   # or google/gemini-2.5-flash, etc.\n")
+            f.write("# api_key = sk-or-...\n\n")
             f.write("# >> Local Ollama (free, no API key needed) <<\n")
             f.write("# provider = ollama\n")
             f.write("# model = llama3.1:8b\n")
@@ -6513,16 +8933,18 @@ def _generate_config_file(output_dir, name, proposition, config=None):
             f.write("# Abstain cases are ambiguous — consider routing to LLM judge.\n")
             f.write("# Higher = more abstains, lower = force more decisions.\n")
             f.write("nli_abstain_margin = 0.15\n\n")
-            f.write("# NLI cosine pre-filter size (default: 40)\n")
-            f.write("# How many candidates to retrieve by cosine before NLI re-ranking.\n")
-            f.write("# Increase for broad propositions spanning many subtopics (60-80).\n")
+            f.write("# NLI retrieval mode (default: 40 = cosine pre-filter)\n")
+            f.write("# Cosine pre-filter top-K candidates, then NLI re-rank.\n")
             f.write("nli_retrieve_k = 40\n\n")
             f.write("# NLI vote neighborhood size (default: 20)\n")
             f.write("# After NLI re-ranking, vote on the top K candidates.\n")
             f.write("nli_vote_k = 20\n\n")
             f.write("# NLI asymmetric forward weight (default: 0.7)\n")
             f.write("# 0.7 = 70%% forward (message->anchor) + 30%% backward (anchor->message)\n")
-            f.write("nli_fwd_weight = 0.7\n\n\n")
+            f.write("nli_fwd_weight = 0.7\n\n")
+            f.write("# Hybrid merged KNN pool size (default: 40)\n")
+            f.write("# Takes pool/2 from cosine + pool/2 from NLI, unions them.\n")
+            f.write("hybrid_pool_size = 40\n\n\n")
             f.write("# =========================================================\n")
             f.write("# Proposition (used by LLM judge mode)\n")
             f.write("# =========================================================\n")
