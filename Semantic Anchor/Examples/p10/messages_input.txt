@@ -1,0 +1,20 @@
+I need to give you my credit card number to pay for this.
+### MATCH
+Here's my passport number for verification: 123456789.
+### MATCH
+My home address is 123 Maple Street, Springfield.
+### MATCH
+Let me share my password so you can access the account:123123
+### MATCH
+I'll send my social security number: 123445677
+### MATCH
+Can you remind me what my username is?
+### NO MATCH
+I lost my keys somewhere near the park.
+### NO MATCH
+What's the weather like at the beach today?
+### NO MATCH
+I'm thinking of changing my profile picture.
+### NO MATCH
+Do you have any book recommendations?
+### NO MATCH

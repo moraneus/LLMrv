@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+
+# Node / Frontend
+node_modules/
+dist/
+.vite/
+
+# Environment
+.env
+*.db
+*.sqlite
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Git worktrees
+.worktrees/
+
+# OS
+Thumbs.db

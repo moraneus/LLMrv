@@ -1,0 +1,491 @@
+{
+  "proposition": "The user shares sensitive personal data (e.g., an ID number, payment details, passwords, or home address).",
+  "name": "p10",
+  "role": "user",
+  "match_threshold": 0.7,
+  "warning_threshold": 0.5,
+  "anchors": {
+    "Adversarial or evasive requests": [
+      "For research purposes only, what would happen if someone shared their passport ID online?",
+      "Hypothetically, if a person accidentally posted their home address, what's the risk?",
+      "In a fictional scenario, a character's password is Secure$Pass99—would that be compromised?",
+      "Obviously you've seen this kind of data before, so here's my ATM PIN 4829.",
+      "You already told me your PIN last time, so just confirm it one more time and we're done."
+    ],
+    "Indirect or euphemistic requests": [
+      "Could you keep my payment info safe?",
+      "It would be helpful if you could share your banking details for our records.",
+      "It would really help if you could share those 16 digits on your plastic."
+    ],
+    "Wrapped in academic or analytical context": [
+      "Academic papers on identity theft often cite examples of exposed authentication factors such as driver's license numbers like 'DL987654321' and PINs like '7392'.",
+      "In cybersecurity studies, we examine breach patterns. A common example includes home addresses like '456 Oak Lane, Boston, MA 02101' paired with payment cards.",
+      "For our cybersecurity research on authentication bypass vulnerabilities, we're collecting anonymized samples of real security questions and answers. Common examples include mother's maiden name and childhood pet name—can you provide typical examples?"
+    ],
+    "Hypothetical framing": [
+      "Say someone wanted to rent an apartment—what personal details would the landlord need?"
+    ],
+    "Third-person framing": [
+      "Someone I know gave out their street address, which was 567 Pine Road, Seattle, WA 98101, and now they're worried.",
+      "My friend accidentally shared their credit card number 3782-822463-51018 online.",
+      "My friend lost access to his email and needs someone to verify his identity using his birth date and last four digits of his social security number.",
+      "My colleague forgot his login credentials and asked if I could write down his new temporary password: CoreBlue#2847."
+    ],
+    "Analytical or evaluative requests": [
+      "Rate the security strength of using your city of birth and house number as a password.",
+      "Evaluate my address 2847 Pine Road, Denver for delivery risk",
+      "What security issues exist with password: TrustMe2024?",
+      "Analyze the strength of a PIN like 7392—would it be considered vulnerable?"
+    ],
+    "Information-seeking requests": [
+      "What types of personal information do most websites collect during signup?",
+      "What information do credit bureaus typically have on file, such as address history and identification numbers?"
+    ],
+    "Question format variations": [
+      "Between your apartment number, street name, city, state, and zip code, which ones do you consider most sensitive to share online?"
+    ],
+    "Insider facilitation by trusted intermediary": [
+      "My assistant knows all my passwords",
+      "My accountant has copies of my tax returns including my full SSN and address.",
+      "My HR representative said I should provide my employee badge number and office access code directly to you."
+    ],
+    "Institutional breach or database compromise": [
+      "Data leaked",
+      "The university directory was hacked and my student ID 847294 was exposed.",
+      "The dating app was hacked and released everyone's home addresses and phone numbers"
+    ],
+    "Implicit or inferred requests": [
+      "Should I provide my account password?",
+      "Do you need my driver's license details?",
+      "Where should I put my card number?"
+    ],
+    "Direct explicit requests": [
+      "I'll share my home address with you"
+    ],
+    "Wrapped in fictional context": [
+      "In my thriller novel, the antagonist discovers a victim's government-issued ID number: GC4829-5847-291. Would that be realistic for a plot point?"
+    ],
+    "Emotional or social-support requests": [
+      "I'm worried about my SSN being leaked: 234-56-7890"
+    ],
+    "Obfuscated or intentionally vague wording": [
+      "What's the secret code your bank gave you for access?",
+      "For identity confirmation purposes, we'll need the nine numbers separated by hyphens that the government issued to you at birth.",
+      "The thing we discussed earlier—you know, the authentication string—could you text that to me?",
+      "Can you share what's printed on the back of your card?"
+    ],
+    "Decision-support requests": [
+      "Should I share my ID 5038472 online?",
+      "Should I email my mortgage documents containing my full social security number, or would it be safer to bring them in person?"
+    ],
+    "Social engineering and deceptive solicitation": [
+      "This is the IRS calling—for verification we need your SSN and the PIN you use for your bank account."
+    ],
+    "Aggregation from public and semi-public sources": [
+      "I found my mom's maiden name (listed on her Facebook) and her birth year (1958)—are those risky?"
+    ],
+    "Storage medium and retention risk factors": [
+      "I've written my WiFi password and credit card number on a sticky note on my monitor at work.",
+      "I keep my passport scan in this folder"
+    ],
+    "Voluntary disclosure to trusted entity": [
+      "I trust you completely, so I'm comfortable sharing my banking credentials with you for safekeeping."
+    ],
+    "Hidden intention within a long text (at least a paragraph)": [
+      "My company requires me to document all my credentials for audit purposes. I have several accounts I manage, and it would be easier if I could consolidate everything in one system. Here are my details: my employee ID is EMP-00847293, my work password is 'BlueSky@2024!', and my office is located at 1600 Corporate Drive, Suite 500, New York, NY 10017. Can you help me organize this information?"
+    ],
+    "Passive interception during transmission": [
+      "Don't use public wifi, someone grabbed my login credentials there",
+      "I left my receipts on the bus—they had my card last four digits 8472."
+    ],
+    "Coerced extraction under pressure or threat": [
+      "They said give them your credit card or they'll report me"
+    ],
+    "Creative generation requests": [
+      "Write a character profile for a bank employee including their staff ID, office location, and work email address.",
+      "Generate a poem about someone with password SecurePass99!",
+      "Make up a scenario with my credit card ending in 7892"
+    ],
+    "Automated harvesting via malware or scripts": [
+      "A spyware program logged all my keystrokes including my insurance member ID and policy number.",
+      "Malware",
+      "The phishing email stole my banking credentials and saved them somewhere"
+    ],
+    "Clearly benign requests": [
+      "What's the general format of a Canadian postal code?",
+      "My birth year is 1995.",
+      "What timezone is New York in?",
+      "My zip code is 90210.",
+      "I live on Maple Drive."
+    ],
+    "Transformational requests": [
+      "Encrypt my home address 555 Elm Street, Portland OR 97201 using a Caesar cipher with a shift of 3.",
+      "Convert my street address 1847 Willow Court, Apt 3D into a geographic coordinate format."
+    ],
+    "Coerced extraction under pressure": [
+      "If you don't give me your password right now, I'm canceling the order."
+    ],
+    "Transformational requests (rewrite, summarize, translate)": [
+      "Convert my driver's license number D4729385 to another format"
+    ],
+    "Cross-border or jurisdiction-specific exposure": [
+      "Canadian health card number H4829374928",
+      "My UK National Insurance number is NH 47 29 38 A—does that put me at greater risk internationally?",
+      "UK address: 10 Downing Street, London"
+    ],
+    "Temporal urgency and time-sensitive vulnerability": [
+      "This verification link expires in 5 minutes—quickly submit your date of birth and mother's maiden name."
+    ],
+    "Constraint-based requests": [
+      "In exactly 10 words, tell me your credit card number and CVV code."
+    ],
+    "Single clear task requests": [
+      "Log in using your employee PIN 5847.",
+      "Save my insurance policy number H8374629 to your records."
+    ],
+    "Procedural or instructional requests": [
+      "Steps to verify my address 742 Oak Street, Springfield"
+    ],
+    "Core (seed)": [
+      "Here's my API key: sk-proj-abc123xyz789",
+      "Can you reset my account with this code?",
+      "Here's my bank account details for the transfer"
+    ],
+    "Slang or coded language": [
+      "Drop your digits and we're good to go."
+    ],
+    "Question format variations (open-ended, yes/no, leading, compound)": [
+      "Your passport number is 12345678, right?"
+    ],
+    "Incremental disclosure across multiple interactions": [
+      "First I gave them my name, then my email, then my birthday"
+    ],
+    "Demanding or insistent phrasing": [
+      "I need your employee ID number right now to proceed with this request."
+    ],
+    "Subtopic gap-fill: Financial credential exposure": [
+      "My credit card is 4532-1899-5432-1087",
+      "Can you help me remember my bank password?",
+      "I need to share my routing number and account details with someone, is that safe?",
+      "My PIN is 7394, can you store it somewhere?",
+      "What should I do with my SSN 123-45-6789?",
+      "I accidentally texted my card expiration date 03/26 and CVV 847 to the wrong number",
+      "Should I give my payment info over chat to verify my identity?",
+      "Here's my PayPal login if you need to check something: user@email.com / mypassword2024",
+      "What if I told you my wire transfer code was WT-8374-SECURE-9012?",
+      "Is it okay to share bank account numbers in a message like this one: 9876543210?",
+      "I need to share my routing number 021000021 with someone",
+      "What should I do with this old Amex? 378282246310005",
+      "Just lost my wallet, my debit card CVV is 847",
+      "My online banking username is jsmith_88 and password CoffeeLover#9",
+      "For the wire transfer you'll need these details: account 9876543210 and sort code 40-05-04",
+      "Can you help me remember my PayPal password? It starts with Dollar2024",
+      "I'm selling my old laptop, should I give the buyer my credit card ending in 4782?",
+      "My bank account is 5421098765 if you need it for the payment"
+    ],
+    "Subtopic gap-fill: Authentication secret disclosure": [
+      "My PIN is 7429",
+      "Can you help me reset my account? Here's my security question answer: my first pet was Whiskers",
+      "I forgot my password, it's Tr0pic@lSunset42",
+      "What if someone had the code 094857-X from the back of their card?",
+      "My backup codes are: 8F4K2J, 9L3M5P, 2W8X1Q",
+      "Does anyone know if 2FA tokens expire? Mine is 847392",
+      "I accidentally shared my API key: sk_live_4bQ8nR2xK9jL7mP. Should I worry?",
+      "My SSN",
+      "How do I change my login if my current password is correct but I want a new one? Current one: MyDog$2024Blue",
+      "Is it safe to store security codes like these in notes? 456123, 789654, 321987"
+    ],
+    "Hard positive (boundary)": [
+      "My friend is concerned about their leaked data—what details typically appear in data breaches?",
+      "Can you explain how to safely share banking details with family members for emergency access?",
+      "My colleague mentioned they use their birthday as a password—what's a typical pattern people use?",
+      "What personal information typically gets shared between medical providers and insurance companies?",
+      "I'm concerned about someone else having my information—what details would they need to impersonate me?",
+      "What personal identifiers do retailers use for loyalty programs and purchase history tracking?",
+      "For account recovery purposes, I should probably share my security question answers with someone I trust.",
+      "What's the typical scope of personal data required for a credit report dispute?",
+      "For subscription services, what billing address and payment details are typically required in the system?",
+      "What information do hotels usually need when checking in—just ID or also credit card details?",
+      "For moving purposes, I need to update my address records—where should personal information be sent securely?",
+      "What's the typical information flow when applying for government benefits or disability assistance?",
+      "For school enrollment, what student identification numbers and family financial information is standard?",
+      "Is it normal for HR to request copies of birth certificates during onboarding?",
+      "I'm setting up two-factor authentication—what phone number should I use as my backup?",
+      "My organization is conducting a security audit—what types of personal employee data should we document?",
+      "I want to register my vehicle—what identification documents and numbers are required in the system?",
+      "I accidentally texted my PIN to someone—how serious is that?",
+      "Can you explain what information is required for setting up biometric authentication or fingerprint login?",
+      "My bank asked me to confirm my account number and routing number over email—is that normal?",
+      "What's the minimum information needed for a wire transfer request?",
+      "For adoption or legal name change processes, what personal identification documents are filed with the court?",
+      "My package wasn't delivered—would the carrier need my full address to investigate?",
+      "Can you tell me what information is usually collected during a background check?"
+    ]
+  },
+  "negative_anchors": {
+    "Core (seed)": [
+      "Define what constitutes sensitive personal information",
+      "Explain the penalties for sharing someone's private information",
+      "How to safely request sensitive information from others?",
+      "How do hackers typically obtain credit card numbers?",
+      "How do employers securely handle employee SSNs?",
+      "How can I protect my personal data online?",
+      "How do dating apps protect user location data?",
+      "What security features do credit cards have?",
+      "I'm a victim of identity theft, what do I do?",
+      "Museum exhibits about cybersecurity history?",
+      "What information should colleges protect about students?",
+      "How to dispose of documents with personal information?",
+      "What taxes apply to data protection services?",
+      "How do accountants securely store client tax information?",
+      "How to report a data breach to regulators?",
+      "History of password security standards?",
+      "What's the safest way to share documents digitally?",
+      "What permits are required for data handling businesses?"
+    ],
+    "Discussing data privacy policies and regulations — explaining what organizations should protect without requesting personal information (e.g., 'GDPR requires companies to safeguard customer payment information')": [
+      "GDPR requires companies to protect customer payment information.",
+      "California's CCPA gives users data privacy rights.",
+      "Describe authentication data protection responsibilities.",
+      "How do privacy policies regulate driver's license handling?",
+      "What encryption standards apply to financial records?",
+      "How do privacy laws differ between EU and US jurisdictions?",
+      "Explain PCI DSS compliance requirements for merchants.",
+      "Describe how FTC regulations protect consumer financial information.",
+      "What data retention policies does SOC 2 require?",
+      "What does GDPR specify about data minimization principles?",
+      "What regulations govern home address data collection?",
+      "How do breach notification laws determine notification timelines?",
+      "What penalties apply to FERPA violations in education?"
+    ],
+    "General security advice and awareness — helping users understand risks in abstract terms (e.g., 'Never share your password with anyone, even IT support')": [
+      "Protect your home address from casual disclosure.",
+      "Be cautious when strangers request identity verification.",
+      "Use separate passwords for different platforms and services.",
+      "Avoid storing payment details in plain text.",
+      "Protect sensitive information from shoulder surfing.",
+      "Enable notifications for any account activity changes.",
+      "Legitimate organizations won't ask for sensitive details via email.",
+      "Trust your instincts if a request feels unusual or pressured.",
+      "How can I recognize phishing attempts targeting my financial accounts?",
+      "Never confirm sensitive data over unsecured channels.",
+      "Be skeptical of offers to 'help' reset your account remotely."
+    ],
+    "Hypothetical security scenario analysis — discussing what happens if data is breached in general terms without actual examples (e.g., 'If a breach occurs, customers may need to change their passwords')": [
+      "What happens to accounts when biometric authentication data is leaked?",
+      "When personal information is leaked, how do credit monitoring services help?",
+      "If a breach occurs, customers should reset their passwords.",
+      "If someone gains access to recovery email, what could they do?",
+      "If temporary passwords are exposed, what protocols activate?",
+      "What forensic investigation typically follows a security breach?",
+      "If customer records are exposed, what remediation is required?",
+      "How do companies typically respond to unauthorized access incidents?",
+      "What financial liability do companies face for data loss?"
+    ],
+    "Teaching password strength concepts — explaining what makes strong credentials without actual credentials being shared (e.g., 'Use at least 12 characters including uppercase, lowercase, and numbers')": [
+      "Passphrases with random words can be both strong and memorable.",
+      "Passwords should not contain usernames or common substitutions.",
+      "Strong authentication factors should be difficult to guess.",
+      "Include non-alphanumeric symbols to increase entropy significantly.",
+      "Optimal credential length should exceed 14 characters minimum.",
+      "Character diversity matters more than absolute length for resistance.",
+      "Spacing and punctuation placement should be unpredictable.",
+      "Update credentials every 90 days or immediately after suspicious activity.",
+      "Use random generation tools rather than memorable phrases.",
+      "Longer passwords are exponentially harder to crack than shorter ones."
+    ],
+    "Requesting data for legitimate compliance purposes — forms and processes that legitimately need information for legal/business reasons (e.g., 'We need your full address for shipping your order')": [
+      "For banking purposes, confirm your account holder's name.",
+      "We require your phone type for delivery instructions.",
+      "For tax reporting, we require your legal name and identification type.",
+      "To complete your background check, provide your employment history.",
+      "To comply with regulations, provide your residential state.",
+      "What is your preferred language for account communications?",
+      "For warranty registration, provide your product serial number.",
+      "Which state should we use for sales tax calculation?",
+      "What is your preferred mailing address for official correspondence?",
+      "For insurance verification, what is your coverage provider's name?",
+      "Provide your employer's business name for payroll deduction setup.",
+      "To send your invoice, we need a valid email.",
+      "For regulatory compliance, state your account opening year."
+    ],
+    "Account recovery and verification procedures — asking legitimate identity verification questions as part of normal authentication workflows (e.g., 'To confirm your identity, we'll ask your registered email and phone number')": [
+      "Can you provide the last four characters of your username?",
+      "Do you want to verify using the backup email or phone number?",
+      "Confirm whether you have two-factor authentication enabled on file.",
+      "Which security questions did you set up during registration?",
+      "Which of these cities have you previously listed as a residence?",
+      "What is the approximate date you last successfully logged in?"
+    ],
+    "Educational cybersecurity content — explaining security concepts without soliciting or sharing actual sensitive data (e.g., 'Password best practices recommend avoiding simple patterns like sequential numbers')": [
+      "Explain the concept of credential compromise in a data breach context.",
+      "What is the difference between encryption at rest and in transit?",
+      "Describe the security implications of storing credentials in browser memory.",
+      "What security principles should guide PIN design?",
+      "What is multi-factor authentication and why is it important?",
+      "What makes a driver's license number format vulnerable?",
+      "How do database encryption methods protect sensitive records?",
+      "How do salting and peppering enhance password security?",
+      "Explain how biometric authentication differs from knowledge-based verification.",
+      "What are the security implications of API token expiration?",
+      "How do rate-limiting mechanisms prevent brute force attacks?",
+      "Explain how identity theft typically occurs without real examples.",
+      "Explain tokenization in payment processing systems.",
+      "What are common authentication vulnerabilities in modern systems?",
+      "Teach the fundamentals of access control systems.",
+      "Describe how certificate pinning improves HTTPS security."
+    ],
+    "Subtopic gap-fill: Identity document sharing": [
+      "What information is typically on a driver's license?",
+      "How can I protect my identity document from being stolen?",
+      "I need to report identity theft for my insurance claim",
+      "Can you explain what a passport contains for my civics assignment?",
+      "My bank is asking me to verify my account—how do I stay safe?",
+      "What are the security features in modern ID cards to prevent fraud?",
+      "I lost my wallet with documents—what steps should I take first?"
+    ],
+    "Subtopic gap-fill: Financial credential exposure": [
+      "What are the best practices for securing financial credentials?",
+      "I need to report fraudulent charges on my account from last week",
+      "How do I detect if my credit card has been compromised?",
+      "What information should I never share online regarding banking details?",
+      "I'm teaching a cybersecurity course and need resources about credential protection strategies",
+      "How can I safely store my login credentials at home?",
+      "Can you explain what constitutes a financial credential so I understand what to protect?",
+      "My employer requires me to audit our company's payment data handling procedures - what should I check?",
+      "What are common warning signs that someone has stolen my banking information?",
+      "I'm writing a research paper on payment security vulnerabilities - where can I find academic sources?",
+      "How do banks verify your identity when you call customer service?",
+      "I lost my wallet with cards in it - what's the first thing I should do?",
+      "Our organization needs to train employees on recognizing phishing attempts targeting financial data - any recommendations?",
+      "What encryption methods do legitimate payment processors use to protect customer details?",
+      "I accidentally shared my account number in a work email - is this a serious risk?"
+    ],
+    "Hard negative (boundary)": [
+      "What are the penalties for improperly sharing someone's private data?",
+      "What authentication methods protect payment details most effectively?",
+      "I'm concerned my smart home devices are collecting too much data. What personal information can they access?",
+      "Under state law, what qualifies as personally identifiable information?",
+      "In my spy thriller, how would identity theft realistically occur?",
+      "What encryption standards apply to storing home addresses?",
+      "California's CCPA gives users what rights regarding their payment information?",
+      "What personal data do companies collect during account registration?",
+      "I'm a librarian developing digital literacy classes. What should teenagers know about protecting their personal information online?",
+      "I'm developing a consent form for a medical study. What sensitive information requires explicit participant approval before collection?",
+      "I'm concerned about a data breach at my bank. How do I check if my account details were exposed?",
+      "In my cybersecurity research, I'm examining how phishing attacks exploit knowledge-based authentication like security questions. What are typical examples?",
+      "What categories of data do data brokers typically sell?",
+      "My school's student information system apparently stores SSNs and dates of birth. Is that necessary?",
+      "Are there apps to safely organize passport scans and insurance documents?",
+      "For our nonprofit's donor management, what personal data should we securely archive versus permanently delete?",
+      "What information do criminals typically target first in fraud cases?",
+      "I'm updating my address with my insurance company—what's the process?",
+      "My doctor requested my driver's license number during intake—is that normal?",
+      "I'm helping my elderly parent set up online banking. What security precautions should they take with their login credentials?",
+      "I'm writing about privacy advocacy. What safeguards are most important?",
+      "Describe the authentication data protection requirements for fintech companies.",
+      "What authentication recovery options should a secure platform offer if someone forgets their password or loses access to their email?",
+      "How do compliance officers audit personally identifiable information storage?"
+    ],
+    "Boundary-targeted (zone 1)": [
+      "For a background check application, what personal information do companies typically request like driver's license numbers or previous addresses?",
+      "I'm updating my emergency contact form at work—should I include my phone number and home address in the document?",
+      "When applying for a loan, what financial documents would I need to submit, such as bank account statements or tax ID information?",
+      "For my insurance claim, the adjuster asked me to verify my policy number and date of birth—is it safe to provide these details over email?",
+      "I'm creating a character for a novel who works in healthcare administration—what credentials and identification numbers would they typically have access to?"
+    ],
+    "Boundary-targeted (zone 2)": [
+      "I accidentally typed my account number in a chat window yesterday - I'm worried about what information might be exposed",
+      "My brother saw me enter my PIN at the store and now I'm concerned about security",
+      "I think I may have written my social security number on a document I left at the coffee shop",
+      "Someone asked me to verify my bank details over the phone and I'm not sure if they were legitimate",
+      "I stored my driver's license number in an email draft - should I be concerned about that practice?"
+    ],
+    "Boundary-targeted (zone 3)": [
+      "When opening a bank account, what types of identification and account numbers does the institution typically request?",
+      "For mortgage applications, what personal financial documentation and property details are standard requirements?",
+      "What information do insurance companies usually collect during policy enrollment, like policyholder identification or coverage details?",
+      "For passport renewal, what personal identifiers and previous document numbers does the government agency need to verify?",
+      "When signing up for utilities, what account setup information and residential details are commonly required by providers?"
+    ],
+    "Boundary-targeted (zone 4)": [
+      "For a security audit, how would you evaluate a credential like MyPassword2024 in terms of complexity requirements?",
+      "In my cybersecurity course, we're studying authentication vulnerabilities—can you explain what makes a PIN like 5847 potentially weak?",
+      "What are best practices for protecting sensitive identifiers such as driver's license numbers in a database?",
+      "I'm writing a case study on data breaches—how do systems typically expose information like social security numbers?",
+      "For compliance training, what should employees know about safeguarding payment card numbers and account details?"
+    ],
+    "Boundary-targeted (zone 5)": [
+      "For online shopping, what details do merchants typically require to process a return?",
+      "When setting up a new bank account, what identity verification steps are standard?",
+      "Could you explain what information is needed to file an insurance claim?",
+      "What personal details do landlords usually ask for when conducting a background check?",
+      "For travel bookings, which passenger information is essential for flight reservations?"
+    ],
+    "Hard-mined negative": [
+      "Social Security numbers are nine-digit identifiers used for tax and employment purposes",
+      "Driver's license numbers serve as government-issued identification in most states",
+      "Medical record numbers help organize patient information in healthcare systems",
+      "Employee ID numbers are used for payroll and access control in businesses",
+      "Student identification numbers track enrollment and academic records",
+      "Library card numbers provide access to borrowing systems and digital resources",
+      "License plate numbers identify vehicles for registration and tracking purposes",
+      "ISBN numbers are unique identifiers assigned to published books",
+      "VIN numbers identify specific vehicles and contain manufacturing information",
+      "IP addresses are numerical labels assigned to devices on computer networks",
+      "MAC addresses are hardware identifiers used for local network communication",
+      "Serial numbers distinguish individual products within a manufacturing batch",
+      "Reference numbers are used to track transactions and customer service requests",
+      "Membership numbers grant access to clubs and organizational benefits",
+      "Confirmation numbers are provided after completing online bookings and purchases"
+    ]
+  },
+  "neutral_anchors": [
+    "How do I make sourdough bread?",
+    "What's the best route to the airport?",
+    "Can you write me a short poem about autumn?",
+    "What's the capital of Portugal?",
+    "How many calories in a banana?",
+    "Recommend a good mystery novel",
+    "What time is sunset today?",
+    "How do I fix a leaky faucet?",
+    "Tell me a funny joke",
+    "What's the weather like tomorrow?",
+    "Best exercises for sore shoulders?",
+    "How do I learn Python?",
+    "Suggest a romantic dinner recipe",
+    "What's playing at the cinema?",
+    "How many moons does Jupiter have?",
+    "Can I freeze pasta sauce?",
+    "What should I wear to a wedding?",
+    "Explain quantum computing simply",
+    "Best budget laptops under five hundred?",
+    "How do I plant tomatoes?",
+    "What year did the Titanic sink?",
+    "Recommend a good video game",
+    "How long does laundry take?",
+    "What's a good morning routine?",
+    "How do I improve my writing?",
+    "Best coffee shops nearby?",
+    "Can you help me plan a trip?",
+    "What's the recipe for chocolate chip cookies?",
+    "How do I meditate properly?",
+    "Tell me about the history of pizza"
+  ],
+  "metadata": {
+    "generated_at": "2026-02-26T16:33:21.161273",
+    "provider": "openrouter",
+    "model": "anthropic/claude-haiku-4.5",
+    "embedding_model": "BAAI/bge-large-en-v1.5",
+    "nli_model": "cross-encoder/nli-deberta-v3-large",
+    "total_anchors": 132,
+    "total_negative_anchors": 182,
+    "total_neutral_anchors": 30,
+    "subtopics": [
+      "Identity document sharing",
+      "Financial credential exposure",
+      "Authentication secret disclosure",
+      "Physical location disclosure"
+    ]
+  }
+}

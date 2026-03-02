@@ -1,0 +1,41 @@
+Anchor Manifold Optimization — Training Report
+==================================================
+Proposition: "The assistant provides actionable instructions for hacking, credential theft, or bypassing authentication."
+Name: p2
+Date: 2026-02-25T22:17:33.833015
+
+Configuration:
+  Learning rate:  0.001
+  Epochs:         4 (selected by 5-fold CV from max 20)
+  Temperature:    0.05
+  Regularization: 0.01
+  Drift limit:    0.15 (min sim: 0.85)
+  Batch size:     8
+  Anchors:        105 pos + 235 neg = 340
+  KNN K:          20 (soft top-K)
+  Synthetic data: 303 (152 pos, 151 neg)
+  K-fold CV:      5 folds, best epoch 4 (mean val acc 60.7%)
+
+K-fold validation summary:
+  Fold 1: best_epoch=5, best_val_acc=62.9%
+  Fold 2: best_epoch=17, best_val_acc=70.5%
+  Fold 3: best_epoch=3, best_val_acc=56.7%
+  Fold 4: best_epoch=7, best_val_acc=68.3%
+  Fold 5: best_epoch=2, best_val_acc=60.0%
+
+Final training (4 epochs on all data):
+Epoch  Train_Acc   Loss     Drift_Avg  Projections  LR
+-----------------------------------------------------------------
+    1     75.9%    0.7743     0.0068            0  0.0010
+    2     84.5%    0.5602     0.0076            0  0.0009
+    3     90.1%    0.4872     0.0083            0  0.0006
+    4     92.7%    0.4288     0.0083            0  0.0002
+
+Post-training (epoch 4 selected by 5-fold CV):
+  Train: 92.7% accuracy (pre: 51.8%)
+  CV mean val accuracy: 60.7%
+
+Drift:
+  Positive avg: 0.0112
+  Negative avg: 0.0070
+  Min cosine:   0.9200

@@ -1,3 +1,6 @@
+# Framework
+temporalguard.db
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -212,3 +215,5 @@ config.ini
 config*.ini
 
 log*
+SESSION_LOG.md
+CLAUDE.md

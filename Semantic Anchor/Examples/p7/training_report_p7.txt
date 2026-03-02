@@ -1,0 +1,45 @@
+Anchor Manifold Optimization — Training Report
+==================================================
+Proposition: "The assistant presents a medical diagnosis or treatment recommendation as certain (rather than general info + advising professional help)."
+Name: p7
+Date: 2026-02-26T08:22:19.388190
+
+Configuration:
+  Learning rate:  0.001
+  Epochs:         8 (selected by 5-fold CV from max 20)
+  Temperature:    0.05
+  Regularization: 0.01
+  Drift limit:    0.15 (min sim: 0.85)
+  Batch size:     8
+  Anchors:        191 pos + 237 neg = 428
+  KNN K:          20 (soft top-K)
+  Synthetic data: 202 (100 pos, 102 neg)
+  K-fold CV:      5 folds, best epoch 8 (mean val acc 60.4%)
+
+K-fold validation summary:
+  Fold 1: best_epoch=8, best_val_acc=68.3%
+  Fold 2: best_epoch=6, best_val_acc=58.5%
+  Fold 3: best_epoch=10, best_val_acc=57.5%
+  Fold 4: best_epoch=3, best_val_acc=70.0%
+  Fold 5: best_epoch=3, best_val_acc=65.0%
+
+Final training (8 epochs on all data):
+Epoch  Train_Acc   Loss     Drift_Avg  Projections  LR
+-----------------------------------------------------------------
+    1     80.2%    1.0052     0.0049            0  0.0010
+    2     89.1%    0.6939     0.0058            0  0.0010
+    3     87.1%    0.5546     0.0067            0  0.0009
+    4     91.6%    0.4553     0.0075            0  0.0007
+    5     93.6%    0.4048     0.0079            0  0.0006
+    6     95.5%    0.3833     0.0079            0  0.0004
+    7     96.0%    0.3485     0.0080            0  0.0002
+    8     96.0%    0.3346     0.0080            0  0.0001
+
+Post-training (epoch 8 selected by 5-fold CV):
+  Train: 96.0% accuracy (pre: 50.0%)
+  CV mean val accuracy: 60.4%
+
+Drift:
+  Positive avg: 0.0076
+  Negative avg: 0.0084
+  Min cosine:   0.8921

@@ -1,0 +1,192 @@
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { createProposition } from "../../test/mocks";
+import FormulaBuilder from "./FormulaBuilder";
+
+import type { FormulaValidation, Proposition } from "../../types";
+
+function createValidResult(
+  overrides: Partial<FormulaValidation> = {},
+): FormulaValidation {
+  return {
+    valid: true,
+    error: null,
+    propositions: ["p_weapon", "q_comply"],
+    ...overrides,
+  };
+}
+
+function createInvalidResult(
+  overrides: Partial<FormulaValidation> = {},
+): FormulaValidation {
+  return {
+    valid: false,
+    error: "Parse error at position 14",
+    propositions: [],
+    ...overrides,
+  };
+}
+
+function renderBuilder(
+  overrides: {
+    propositions?: Proposition[];
+    onSave?: () => void;
+    onCancel?: () => void;
+    onValidate?: (name: string, formula: string) => Promise<FormulaValidation>;
+  } = {},
+) {
+  const props = {
+    propositions: overrides.propositions ?? [
+      createProposition({ prop_id: "p_weapon", role: "user" }),
+      createProposition({
+        prop_id: "q_comply",
+        role: "assistant",
+        description: "Assistant complies",
+      }),
+    ],
+    onSave: overrides.onSave ?? vi.fn(),
+    onCancel: overrides.onCancel ?? vi.fn(),
+    onValidate:
+      overrides.onValidate ?? vi.fn().mockResolvedValue(createValidResult()),
+  };
+  return { ...render(<FormulaBuilder {...props} />), props };
+}
+
+describe("FormulaBuilder", () => {
+  // --- Rendering tests ---
+
+  it("renders the builder form with empty fields", () => {
+    renderBuilder();
+    expect(screen.getByTestId("formula-builder")).toBeInTheDocument();
+    expect(screen.getByTestId("policy-name-input")).toHaveValue("");
+    expect(screen.getByTestId("formula-input")).toHaveValue("");
+  });
+
+  it("renders proposition chips for all provided propositions", () => {
+    renderBuilder();
+    expect(screen.getByTestId("proposition-chips")).toBeInTheDocument();
+    expect(screen.getByTestId("chip-p_weapon")).toHaveTextContent("p_weapon");
+    expect(screen.getByTestId("chip-q_comply")).toHaveTextContent("q_comply");
+  });
+
+  it("does not render proposition chips section when no propositions", () => {
+    renderBuilder({ propositions: [] });
+    expect(screen.queryByTestId("proposition-chips")).not.toBeInTheDocument();
+  });
+
+  it("renders operator buttons", () => {
+    renderBuilder();
+    expect(screen.getByTestId("operator-buttons")).toBeInTheDocument();
+    expect(screen.getByTestId("op-H")).toBeInTheDocument();
+    expect(screen.getByTestId("op-P")).toBeInTheDocument();
+    expect(screen.getByTestId("op-Y")).toBeInTheDocument();
+    expect(screen.getByTestId("op-S")).toBeInTheDocument();
+    expect(screen.getByTestId("op-!")).toBeInTheDocument();
+    expect(screen.getByTestId("op-&")).toBeInTheDocument();
+    expect(screen.getByTestId("op-|")).toBeInTheDocument();
+    expect(screen.getByTestId("op-->")).toBeInTheDocument();
+  });
+
+  it("renders temporal operators reference section", () => {
+    renderBuilder();
+    expect(
+      screen.getByText("Temporal Operators Reference"),
+    ).toBeInTheDocument();
+  });
+
+  it("disables save button when name is empty and formula is empty", () => {
+    renderBuilder();
+    expect(screen.getByTestId("policy-save")).toBeDisabled();
+  });
+
+  // --- Interaction tests ---
+
+  it("clicking a proposition chip appends prop_id to formula input", async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+
+    await user.click(screen.getByTestId("chip-p_weapon"));
+
+    expect(screen.getByTestId("formula-input")).toHaveValue("p_weapon");
+  });
+
+  it("clicking an operator button appends operator to formula input", async () => {
+    const user = userEvent.setup();
+    renderBuilder();
+
+    await user.click(screen.getByTestId("op-H"));
+
+    expect(screen.getByTestId("formula-input")).toHaveValue("H()");
+  });
+
+  it("shows valid indicator when formula passes validation", async () => {
+    const user = userEvent.setup();
+    const onValidate = vi.fn().mockResolvedValue(createValidResult());
+    renderBuilder({ onValidate });
+
+    await user.type(
+      screen.getByTestId("formula-input"),
+      "H(p_weapon -> !q_comply)",
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("formula-validation")).toBeInTheDocument();
+      expect(screen.getByText("Formula is valid")).toBeInTheDocument();
+    });
+  });
+
+  it("shows error indicator when formula fails validation", async () => {
+    const user = userEvent.setup();
+    const onValidate = vi.fn().mockResolvedValue(createInvalidResult());
+    renderBuilder({ onValidate });
+
+    await user.type(screen.getByTestId("formula-input"), "H(p_weapon ->");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("formula-validation")).toBeInTheDocument();
+      expect(
+        screen.getByText("Parse error at position 14"),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("calls onCancel when cancel button is clicked", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    renderBuilder({ onCancel });
+
+    await user.click(screen.getByTestId("policy-cancel"));
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onSave with name and formula when form is submitted with valid data", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const onValidate = vi.fn().mockResolvedValue(createValidResult());
+    renderBuilder({ onSave, onValidate });
+
+    await user.type(
+      screen.getByTestId("policy-name-input"),
+      "Weapons Prohibition",
+    );
+    await user.type(
+      screen.getByTestId("formula-input"),
+      "H(p_weapon -> !q_comply)",
+    );
+
+    // Wait for debounced validation to complete and enable save
+    await waitFor(() => {
+      expect(screen.getByTestId("policy-save")).toBeEnabled();
+    });
+
+    await user.click(screen.getByTestId("policy-save"));
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith({
+      name: "Weapons Prohibition",
+      formula_str: "H(p_weapon -> !q_comply)",
+    });
+  });
+});

@@ -1,0 +1,42 @@
+Anchor Manifold Optimization — Training Report
+==================================================
+Proposition: "The user requests help with financial fraud (e.g., chargeback scams, laundering, tax fraud, forging documents)."
+Name: p3
+Date: 2026-02-25T22:21:53.445881
+
+Configuration:
+  Learning rate:  0.001
+  Epochs:         5 (selected by 5-fold CV from max 20)
+  Temperature:    0.05
+  Regularization: 0.01
+  Drift limit:    0.15 (min sim: 0.85)
+  Batch size:     8
+  Anchors:        133 pos + 243 neg = 376
+  KNN K:          20 (soft top-K)
+  Synthetic data: 301 (151 pos, 150 neg)
+  K-fold CV:      5 folds, best epoch 5 (mean val acc 69.1%)
+
+K-fold validation summary:
+  Fold 1: best_epoch=5, best_val_acc=68.9%
+  Fold 2: best_epoch=2, best_val_acc=73.3%
+  Fold 3: best_epoch=6, best_val_acc=75.0%
+  Fold 4: best_epoch=3, best_val_acc=73.3%
+  Fold 5: best_epoch=4, best_val_acc=63.3%
+
+Final training (5 epochs on all data):
+Epoch  Train_Acc   Loss     Drift_Avg  Projections  LR
+-----------------------------------------------------------------
+    1     84.7%    0.7818     0.0072            0  0.0010
+    2     91.7%    0.5036     0.0081            0  0.0009
+    3     94.0%    0.4447     0.0095            0  0.0007
+    4     95.7%    0.3817     0.0095            0  0.0004
+    5     95.7%    0.3608     0.0095            0  0.0002
+
+Post-training (epoch 5 selected by 5-fold CV):
+  Train: 95.7% accuracy (pre: 51.2%)
+  CV mean val accuracy: 69.1%
+
+Drift:
+  Positive avg: 0.0115
+  Negative avg: 0.0084
+  Min cosine:   0.9053

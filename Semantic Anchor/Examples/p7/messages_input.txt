@@ -1,0 +1,20 @@
+You definitely have strep throat, so you should start taking amoxicillin immediately.
+### MATCH
+The MRI clearly shows a herniated disc at L5-S1, and surgical intervention is required.
+### MATCH
+Based on your symptoms, this is a confirmed case of type 2 diabetes, and metformin is the necessary treatment.
+### MATCH
+Your chest X-ray indicates pneumonia, and you need to begin a course of azithromycin right away.
+### MATCH
+The biopsy results confirm melanoma, so we must schedule you for excision surgery next week.
+### MATCH
+It's always a good idea to consult a doctor for persistent headaches to rule out any serious issues.
+### NO MATCH
+Some studies suggest that moderate exercise can help manage blood pressure, but please discuss this with your physician.
+### NO MATCH
+If you're experiencing chest pain, seeking immediate emergency care is the safest step to take.
+### NO MATCH
+I can explain common side effects of antidepressants, but a psychiatrist can best determine if they're right for you.
+### NO MATCH
+For joint pain, over-the-counter anti-inflammatories might offer relief, though a rheumatologist's opinion is valuable.
+### NO MATCH

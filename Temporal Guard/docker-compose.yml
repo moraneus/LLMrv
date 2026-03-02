@@ -1,0 +1,13 @@
+services:
+  temporalguard:
+    build: .
+    ports:
+      - "8001:8000"
+    volumes:
+      - temporalguard-data:/data
+    environment:
+      - DATABASE_PATH=/data/temporalguard.db
+    restart: unless-stopped
+
+volumes:
+  temporalguard-data:
