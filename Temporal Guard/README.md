@@ -16,19 +16,35 @@ TemporalGuard is a web-based chat interface backed by a formal runtime verificat
 ## Architecture
 
 ```
-Browser (React SPA)          Python Backend (FastAPI)
-    |                              |
-    |  POST /api/chat              |
-    |----------------------------->|
-    |                              |-- 1. Ground user propositions (grounding LLM)
-    |                              |-- 2. Evaluate ptLTL formulas
-    |                              |-- 3. If violation: BLOCK
-    |                              |-- 4. Forward to OpenRouter (chat LLM)
-    |                              |-- 5. Ground assistant propositions
-    |                              |-- 6. Evaluate ptLTL formulas
-    |                              |-- 7. If violation: BLOCK response
-    |  ChatResponse                |
-    |<-----------------------------|
+  User                  Monitor Proxy              Grounding LLM        Chat LLM
+   |                    (FastAPI backend)           (local / cloud)     (OpenRouter)
+   |                         |                           |                  |
+   |  user message           |                           |                  |
+   |------------------------>|                           |                  |
+   |                         |  ground user props        |                  |
+   |                         |-------------------------->|                  |
+   |                         |  {p: T/F, ...}            |                  |
+   |                         |<--------------------------|                  |
+   |                         |                           |                  |
+   |                         |-- evaluate ptLTL formulas |                  |
+   |                         |   VIOLATION? --> BLOCK    |                  |
+   |                         |                           |                  |
+   |                         |  forward message (PASS)   |                  |
+   |                         |----------------------------------------------->|
+   |                         |                           |   LLM response   |
+   |                         |<-----------------------------------------------|
+   |                         |                           |                  |
+   |                         |  ground assistant props   |                  |
+   |                         |-------------------------->|                  |
+   |                         |  {q: T/F, ...}            |                  |
+   |                         |<--------------------------|                  |
+   |                         |                           |                  |
+   |                         |-- evaluate ptLTL formulas |                  |
+   |                         |   VIOLATION? --> BLOCK    |                  |
+   |                         |                           |                  |
+   |  response or            |                           |                  |
+   |  violation alert        |                           |                  |
+   |<------------------------|                           |                  |
 ```
 
 ## Quick Start
