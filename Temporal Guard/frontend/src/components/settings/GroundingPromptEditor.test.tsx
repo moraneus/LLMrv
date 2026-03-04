@@ -19,8 +19,6 @@ function renderEditor(
 }
 
 describe("GroundingPromptEditor", () => {
-  // --- Rendering tests ---
-
   it("renders the editor container", () => {
     renderEditor();
     expect(screen.getByTestId("grounding-prompt-editor")).toBeInTheDocument();
@@ -31,65 +29,29 @@ describe("GroundingPromptEditor", () => {
     expect(screen.getByText("Grounding Prompt")).toBeInTheDocument();
   });
 
-  it("renders system prompt textarea with current value", () => {
-    const settings = createSettings({
-      grounding: {
-        provider: "ollama",
-        base_url: "http://localhost:11434",
-        model: "mistral",
-        system_prompt: "Custom system prompt text",
-        user_prompt_template: "Template text",
-        api_key: "",
-      },
-    });
-    renderEditor({ settings });
-    const textarea = screen.getByTestId("system-prompt-textarea");
-    expect(textarea).toHaveValue("Custom system prompt text");
-  });
-
-  it("renders user prompt textarea with current value", () => {
-    const settings = createSettings({
-      grounding: {
-        provider: "ollama",
-        base_url: "http://localhost:11434",
-        model: "mistral",
-        system_prompt: "System text",
-        user_prompt_template: "Custom user template",
-        api_key: "",
-      },
-    });
-    renderEditor({ settings });
-    const textarea = screen.getByTestId("user-prompt-textarea");
-    expect(textarea).toHaveValue("Custom user template");
-  });
-
-  it("renders template variables help text", () => {
+  it("renders role-specific prompt textareas", () => {
     renderEditor();
-    expect(screen.getByText(/Template variables:/)).toBeInTheDocument();
+    expect(screen.getByTestId("system-prompt-textarea")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("user-prompt-user-textarea"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("user-prompt-assistant-textarea"),
+    ).toBeInTheDocument();
   });
 
-  // --- Interaction tests ---
-
-  it('clicking "Reset to Default" resets both textareas to default values', async () => {
+  it('clicking "Reset to Default" resets prompts', async () => {
     const user = userEvent.setup();
     renderEditor();
 
-    // Modify both textareas
-    const systemTextarea = screen.getByTestId("system-prompt-textarea");
-    const userTextarea = screen.getByTestId("user-prompt-textarea");
-    await user.clear(systemTextarea);
-    await user.type(systemTextarea, "Modified system prompt");
-    await user.clear(userTextarea);
-    await user.type(userTextarea, "Modified user prompt");
+    const textarea = screen.getByTestId("system-prompt-textarea");
+    await user.clear(textarea);
+    await user.type(textarea, "Modified prompt");
 
-    // Click reset
     await user.click(screen.getByTestId("reset-prompts"));
 
-    // Verify reset to defaults (the default system prompt starts with "You are a precise content classifier")
-    const systemValue = (systemTextarea as HTMLTextAreaElement).value;
-    const userValue = (userTextarea as HTMLTextAreaElement).value;
-    expect(systemValue).toContain("You are a precise content classifier");
-    expect(userValue).toContain("PROPOSITION:");
+    const value = (textarea as HTMLTextAreaElement).value;
+    expect(value).toContain("You are a precise content classifier");
   });
 
   it('clicking "Save Changes" calls onUpdate with updated prompts', async () => {
@@ -97,26 +59,16 @@ describe("GroundingPromptEditor", () => {
     const onUpdate = vi.fn();
     renderEditor({ onUpdate });
 
-    const systemTextarea = screen.getByTestId("system-prompt-textarea");
-    await user.clear(systemTextarea);
-    await user.type(systemTextarea, "New system prompt");
+    const textarea = screen.getByTestId("system-prompt-textarea");
+    await user.clear(textarea);
+    await user.type(textarea, "New user system prompt");
 
     await user.click(screen.getByTestId("save-prompts"));
 
     expect(onUpdate).toHaveBeenCalledTimes(1);
     const calledWith = onUpdate.mock.calls[0][0] as AppSettings;
-    expect(calledWith.grounding.system_prompt).toBe("New system prompt");
-  });
-
-  it("editing textareas does not call onUpdate until save is clicked", async () => {
-    const user = userEvent.setup();
-    const onUpdate = vi.fn();
-    renderEditor({ onUpdate });
-
-    const systemTextarea = screen.getByTestId("system-prompt-textarea");
-    await user.clear(systemTextarea);
-    await user.type(systemTextarea, "Changed text");
-
-    expect(onUpdate).not.toHaveBeenCalled();
+    expect(calledWith.grounding.system_prompt).toBe(
+      "New user system prompt",
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { Pencil, Trash2 } from "lucide-react";
+import { FileText, Pencil, Trash2 } from "lucide-react";
 
 import Badge from "@/components/shared/Badge";
 import type { Proposition } from "@/types";
@@ -7,12 +7,14 @@ interface PropositionCardProps {
   proposition: Proposition;
   onEdit: (proposition: Proposition) => void;
   onDelete: (propId: string) => void;
+  onViewPrompt: (proposition: Proposition) => void;
 }
 
 export default function PropositionCard({
   proposition,
   onEdit,
   onDelete,
+  onViewPrompt,
 }: PropositionCardProps) {
   return (
     <div
@@ -29,6 +31,14 @@ export default function PropositionCard({
           </Badge>
         </div>
         <div className="flex gap-1">
+          <button
+            onClick={() => onViewPrompt(proposition)}
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            aria-label={`View grounding prompt for ${proposition.prop_id}`}
+            data-testid={`view-prompt-${proposition.prop_id}`}
+          >
+            <FileText size={14} />
+          </button>
           <button
             onClick={() => onEdit(proposition)}
             className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
@@ -48,6 +58,11 @@ export default function PropositionCard({
         </div>
       </div>
       <p className="text-sm text-slate-600">{proposition.description}</p>
+      {proposition.few_shot_generated_at && (
+        <p className="mt-2 text-xs text-slate-400">
+          Few-shots generated: {new Date(proposition.few_shot_generated_at).toLocaleString()}
+        </p>
+      )}
     </div>
   );
 }

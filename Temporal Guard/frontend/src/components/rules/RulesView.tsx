@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Loader2, Plus } from "lucide-react";
 
+import { getPropositionGroundingPrompt } from "@/api/client";
 import Modal from "@/components/shared/Modal";
 import { usePolicies } from "@/hooks/usePolicies";
-import type { Proposition } from "@/types";
+import type { GroundingPromptPreview, Proposition } from "@/types";
 import FormulaBuilder from "./FormulaBuilder";
 import PropositionCard from "./PropositionCard";
 import PropositionEditor from "./PropositionEditor";
@@ -25,6 +26,12 @@ export default function RulesView() {
   const [showPropEditor, setShowPropEditor] = useState(false);
   const [editingProp, setEditingProp] = useState<Proposition | null>(null);
   const [showFormulaBuilder, setShowFormulaBuilder] = useState(false);
+  const [showPromptModal, setShowPromptModal] = useState(false);
+  const [promptPreview, setPromptPreview] = useState<GroundingPromptPreview | null>(
+    null,
+  );
+  const [promptLoading, setPromptLoading] = useState(false);
+  const [promptError, setPromptError] = useState<string | null>(null);
 
   const handleSaveProp = async (data: {
     prop_id: string;
@@ -50,6 +57,25 @@ export default function RulesView() {
 
   const handleDeleteProp = async (propId: string) => {
     await deleteProposition(propId);
+  };
+
+  const handleViewPrompt = async (proposition: Proposition) => {
+    setShowPromptModal(true);
+    setPromptLoading(true);
+    setPromptError(null);
+    setPromptPreview(null);
+    try {
+      const preview = await getPropositionGroundingPrompt(proposition.prop_id);
+      setPromptPreview(preview);
+    } catch (err) {
+      setPromptError(
+        err instanceof Error
+          ? err.message
+          : "Failed to load grounding prompt preview",
+      );
+    } finally {
+      setPromptLoading(false);
+    }
   };
 
   const handleSavePolicy = async (data: {
@@ -121,6 +147,7 @@ export default function RulesView() {
               proposition={p}
               onEdit={handleEditProp}
               onDelete={handleDeleteProp}
+              onViewPrompt={handleViewPrompt}
             />
           ))}
         </div>
@@ -200,6 +227,47 @@ export default function RulesView() {
           onCancel={() => setShowFormulaBuilder(false)}
           onValidate={validateFormula}
         />
+      </Modal>
+
+      <Modal
+        open={showPromptModal}
+        onClose={() => {
+          setShowPromptModal(false);
+          setPromptPreview(null);
+          setPromptError(null);
+          setPromptLoading(false);
+        }}
+        title="Grounding Prompt Preview"
+      >
+        <div className="space-y-4">
+          {promptLoading && (
+            <div className="flex items-center gap-2 text-sm text-slate-600">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading prompt...
+            </div>
+          )}
+          {promptError && <p className="text-sm text-red-500">{promptError}</p>}
+          {promptPreview && (
+            <>
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase text-slate-500">
+                  System Prompt
+                </p>
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+                  {promptPreview.system_prompt}
+                </pre>
+              </div>
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase text-slate-500">
+                  User Prompt
+                </p>
+                <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+                  {promptPreview.user_prompt}
+                </pre>
+              </div>
+            </>
+          )}
+        </div>
       </Modal>
     </div>
   );

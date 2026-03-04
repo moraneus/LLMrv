@@ -2,6 +2,7 @@ import type {
   AppSettings,
   ChatResponse,
   FormulaValidation,
+  GroundingPromptPreview,
   OpenRouterModel,
   Policy,
   Proposition,
@@ -101,6 +102,19 @@ export async function deleteProposition(propId: string): Promise<void> {
   return request<void>(`/api/propositions/${encodeURIComponent(propId)}`, {
     method: "DELETE",
   });
+}
+
+export async function getPropositionGroundingPrompt(
+  propId: string,
+  messageText?: string,
+): Promise<GroundingPromptPreview> {
+  const params = new URLSearchParams();
+  if (messageText !== undefined) params.set("message_text", messageText);
+  const query = params.toString();
+  const url = `/api/propositions/${encodeURIComponent(propId)}/grounding-prompt${
+    query ? `?${query}` : ""
+  }`;
+  return request<GroundingPromptPreview>(url);
 }
 
 // --- Policies ---

@@ -11,6 +11,7 @@ describe("PropositionCard", () => {
         proposition={createProposition()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
+        onViewPrompt={vi.fn()}
       />,
     );
     expect(screen.getByText("p_weapon")).toBeInTheDocument();
@@ -23,6 +24,7 @@ describe("PropositionCard", () => {
         proposition={createProposition({ role: "user" })}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
+        onViewPrompt={vi.fn()}
       />,
     );
     expect(screen.getByText("user")).toBeInTheDocument();
@@ -37,6 +39,7 @@ describe("PropositionCard", () => {
         })}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
+        onViewPrompt={vi.fn()}
       />,
     );
     expect(screen.getByText("assistant")).toBeInTheDocument();
@@ -50,6 +53,7 @@ describe("PropositionCard", () => {
         })}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
+        onViewPrompt={vi.fn()}
       />,
     );
     expect(
@@ -63,6 +67,7 @@ describe("PropositionCard", () => {
         proposition={createProposition({ prop_id: "p_weapon" })}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
+        onViewPrompt={vi.fn()}
       />,
     );
     expect(screen.getByTestId("proposition-card-p_weapon")).toBeInTheDocument();
@@ -73,7 +78,12 @@ describe("PropositionCard", () => {
     const onEdit = vi.fn();
     const prop = createProposition();
     render(
-      <PropositionCard proposition={prop} onEdit={onEdit} onDelete={vi.fn()} />,
+      <PropositionCard
+        proposition={prop}
+        onEdit={onEdit}
+        onDelete={vi.fn()}
+        onViewPrompt={vi.fn()}
+      />,
     );
 
     await user.click(screen.getByTestId("edit-proposition-p_weapon"));
@@ -88,6 +98,7 @@ describe("PropositionCard", () => {
         proposition={createProposition()}
         onEdit={vi.fn()}
         onDelete={onDelete}
+        onViewPrompt={vi.fn()}
       />,
     );
 
@@ -101,6 +112,7 @@ describe("PropositionCard", () => {
         proposition={createProposition()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
+        onViewPrompt={vi.fn()}
       />,
     );
     expect(
@@ -114,6 +126,7 @@ describe("PropositionCard", () => {
         proposition={createProposition()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
+        onViewPrompt={vi.fn()}
       />,
     );
     expect(

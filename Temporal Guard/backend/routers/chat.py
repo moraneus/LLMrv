@@ -38,6 +38,19 @@ _session_locks: dict[str, asyncio.Lock] = {}
 MAX_MESSAGE_SIZE = 50 * 1024
 
 
+def _parse_json_list_field(raw_value) -> list[str]:
+    """Parse JSON list text from DB proposition fields."""
+    if not raw_value:
+        return []
+    try:
+        parsed = json.loads(raw_value)
+        if isinstance(parsed, list):
+            return [str(x) for x in parsed if str(x).strip()]
+    except Exception:
+        pass
+    return []
+
+
 def invalidate_monitors() -> None:
     """Clear all cached monitors.
 
@@ -82,6 +95,9 @@ async def _get_or_create_monitor(db: DatabaseStore, session_id: str) -> Conversa
             prop_id=r["prop_id"],
             description=r["description"],
             role=r["role"],
+            few_shot_positive=_parse_json_list_field(r.get("few_shot_positive")),
+            few_shot_negative=_parse_json_list_field(r.get("few_shot_negative")),
+            few_shot_generated_at=r.get("few_shot_generated_at"),
         )
         for r in prop_rows
         if r["prop_id"] in needed_prop_ids
@@ -95,7 +111,8 @@ async def _get_or_create_monitor(db: DatabaseStore, session_id: str) -> Conversa
     grounding = LLMGrounding(
         client=grounding_client,
         system_prompt=settings.grounding.system_prompt,
-        user_prompt_template=settings.grounding.user_prompt_template,
+        user_prompt_template_user=settings.grounding.user_prompt_template_user,
+        user_prompt_template_assistant=settings.grounding.user_prompt_template_assistant,
     )
 
     monitor = ConversationMonitor(

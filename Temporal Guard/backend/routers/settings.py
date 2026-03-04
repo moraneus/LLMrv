@@ -27,16 +27,29 @@ def _get_db(request: Request) -> DatabaseStore:
 async def _load_settings(db: DatabaseStore) -> AppSettings:
     """Load AppSettings from database key-value store."""
     all_settings = await db.get_all_settings()
+    # Backward compatibility for older keys.
+    legacy_system_prompt = (
+        all_settings.get("grounding_system_prompt")
+        or all_settings.get("grounding_system_prompt_user")
+        or all_settings.get("grounding_system_prompt_assistant")
+    )
+    legacy_user_prompt = all_settings.get("grounding_user_prompt_template")
+
     grounding = GroundingSettings(
         provider=all_settings.get("grounding_provider", GroundingProvider.OLLAMA),
         base_url=all_settings.get("grounding_base_url", "http://localhost:11434"),
         model=all_settings.get("grounding_model", "mistral"),
         system_prompt=all_settings.get(
-            "grounding_system_prompt", GroundingSettings().system_prompt
+            "grounding_system_prompt",
+            legacy_system_prompt or GroundingSettings().system_prompt,
         ),
-        user_prompt_template=all_settings.get(
-            "grounding_user_prompt_template",
-            GroundingSettings().user_prompt_template,
+        user_prompt_template_user=all_settings.get(
+            "grounding_user_prompt_template_user",
+            legacy_user_prompt or GroundingSettings().user_prompt_template_user,
+        ),
+        user_prompt_template_assistant=all_settings.get(
+            "grounding_user_prompt_template_assistant",
+            legacy_user_prompt or GroundingSettings().user_prompt_template_assistant,
         ),
         api_key=all_settings.get("grounding_api_key", ""),
     )
@@ -57,7 +70,18 @@ async def _save_settings(db: DatabaseStore, settings: AppSettings) -> None:
     await db.set_setting("grounding_base_url", settings.grounding.base_url)
     await db.set_setting("grounding_model", settings.grounding.model)
     await db.set_setting("grounding_system_prompt", settings.grounding.system_prompt)
-    await db.set_setting("grounding_user_prompt_template", settings.grounding.user_prompt_template)
+    await db.set_setting(
+        "grounding_user_prompt_template_user",
+        settings.grounding.user_prompt_template_user,
+    )
+    await db.set_setting(
+        "grounding_user_prompt_template_assistant",
+        settings.grounding.user_prompt_template_assistant,
+    )
+    # Persist legacy key for compatibility with older clients.
+    await db.set_setting(
+        "grounding_user_prompt_template", settings.grounding.user_prompt_template_user
+    )
     await db.set_setting("grounding_api_key", settings.grounding.api_key)
 
 

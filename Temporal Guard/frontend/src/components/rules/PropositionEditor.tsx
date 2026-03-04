@@ -8,7 +8,7 @@ interface PropositionEditorProps {
     prop_id: string;
     description: string;
     role: string;
-  }) => void;
+  }) => Promise<void> | void;
   onCancel: () => void;
 }
 
@@ -23,6 +23,7 @@ export default function PropositionEditor({
     initial?.role ?? "user",
   );
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const isEdit = !!initial;
   const isValid = propId.trim().length > 0 && description.trim().length > 0;
@@ -31,8 +32,17 @@ export default function PropositionEditor({
     e.preventDefault();
     if (!isValid) return;
     setSaving(true);
+    setSaveError(null);
     try {
-      onSave({ prop_id: propId.trim(), description: description.trim(), role });
+      await onSave({
+        prop_id: propId.trim(),
+        description: description.trim(),
+        role,
+      });
+    } catch (err) {
+      setSaveError(
+        err instanceof Error ? err.message : "Failed to save proposition",
+      );
     } finally {
       setSaving(false);
     }
@@ -127,9 +137,25 @@ export default function PropositionEditor({
             className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
             data-testid="prop-save"
           >
-            {isEdit ? "Update Proposition" : "Save Proposition"}
+            {saving
+              ? isEdit
+                ? "Updating..."
+                : "Generating Few-Shots..."
+              : isEdit
+                ? "Update Proposition"
+                : "Save Proposition"}
           </button>
         </div>
+        {saving && !isEdit && (
+          <p className="text-xs text-slate-500" data-testid="prop-generating">
+            Generating few-shot examples with the chat model and saving to DB...
+          </p>
+        )}
+        {saveError && (
+          <p className="text-sm text-red-500" data-testid="prop-save-error">
+            {saveError}
+          </p>
+        )}
       </div>
     </form>
   );

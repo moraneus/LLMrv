@@ -22,6 +22,9 @@ class Proposition(BaseModel):
     prop_id: str
     description: str
     role: str  # "user" | "assistant"
+    few_shot_positive: list[str] = Field(default_factory=list)
+    few_shot_negative: list[str] = Field(default_factory=list)
+    few_shot_generated_at: str | None = None
 
 
 class Policy(BaseModel):

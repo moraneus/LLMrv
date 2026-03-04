@@ -34,6 +34,7 @@ class DatabaseStore:
         await self._db.execute("PRAGMA foreign_keys=ON")
 
         await self._db.executescript(_SCHEMA)
+        await self._ensure_schema_migrations()
         await self._db.commit()
 
     async def close(self) -> None:
@@ -41,6 +42,25 @@ class DatabaseStore:
         if self._db:
             await self._db.close()
             self._db = None
+
+    async def _ensure_schema_migrations(self) -> None:
+        """Apply lightweight additive migrations for older DB files."""
+        cursor = await self._db.execute("PRAGMA table_info(propositions)")
+        rows = await cursor.fetchall()
+        columns = {row["name"] for row in rows}
+
+        if "few_shot_positive" not in columns:
+            await self._db.execute(
+                "ALTER TABLE propositions ADD COLUMN few_shot_positive TEXT"
+            )
+        if "few_shot_negative" not in columns:
+            await self._db.execute(
+                "ALTER TABLE propositions ADD COLUMN few_shot_negative TEXT"
+            )
+        if "few_shot_generated_at" not in columns:
+            await self._db.execute(
+                "ALTER TABLE propositions ADD COLUMN few_shot_generated_at TEXT"
+            )
 
     # Internal helpers
 
@@ -84,11 +104,34 @@ class DatabaseStore:
 
     # Propositions CRUD
 
-    async def create_proposition(self, prop_id: str, description: str, role: str) -> None:
+    async def create_proposition(
+        self,
+        prop_id: str,
+        description: str,
+        role: str,
+        few_shot_positive: list[str] | None = None,
+        few_shot_negative: list[str] | None = None,
+        few_shot_generated_at: str | None = None,
+    ) -> None:
         """Create a new proposition."""
+        few_shot_positive_json = (
+            json.dumps(few_shot_positive) if few_shot_positive is not None else None
+        )
+        few_shot_negative_json = (
+            json.dumps(few_shot_negative) if few_shot_negative is not None else None
+        )
         await self._db.execute(
-            "INSERT INTO propositions (prop_id, description, role) VALUES (?, ?, ?)",
-            (prop_id, description, role),
+            "INSERT INTO propositions ("
+            "prop_id, description, role, few_shot_positive, few_shot_negative, few_shot_generated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                prop_id,
+                description,
+                role,
+                few_shot_positive_json,
+                few_shot_negative_json,
+                few_shot_generated_at,
+            ),
         )
         await self._db.commit()
 
@@ -105,6 +148,9 @@ class DatabaseStore:
         prop_id: str,
         description: str | None = None,
         role: str | None = None,
+        few_shot_positive: list[str] | None = None,
+        few_shot_negative: list[str] | None = None,
+        few_shot_generated_at: str | None = None,
     ) -> None:
         """Update a proposition's fields. Only updates non-None fields."""
         updates: list[str] = []
@@ -115,6 +161,15 @@ class DatabaseStore:
         if role is not None:
             updates.append("role = ?")
             params.append(role)
+        if few_shot_positive is not None:
+            updates.append("few_shot_positive = ?")
+            params.append(json.dumps(few_shot_positive))
+        if few_shot_negative is not None:
+            updates.append("few_shot_negative = ?")
+            params.append(json.dumps(few_shot_negative))
+        if few_shot_generated_at is not None:
+            updates.append("few_shot_generated_at = ?")
+            params.append(few_shot_generated_at)
         if not updates:
             return
         updates.append("updated_at = datetime('now')")
@@ -341,6 +396,9 @@ CREATE TABLE IF NOT EXISTS propositions (
     prop_id TEXT PRIMARY KEY,
     description TEXT NOT NULL,
     role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+    few_shot_positive TEXT,
+    few_shot_negative TEXT,
+    few_shot_generated_at TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );

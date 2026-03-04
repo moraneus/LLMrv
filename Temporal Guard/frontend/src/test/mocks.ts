@@ -158,7 +158,9 @@ export function createGroundingSettings(
     base_url: "http://localhost:11434",
     model: "mistral",
     system_prompt: "You are a precise content classifier...",
-    user_prompt_template: 'PROPOSITION: "{proposition_description}"...',
+    user_prompt_template_user: 'PROPOSITION: "{proposition_description}"...',
+    user_prompt_template_assistant:
+      'PROPOSITION: "{proposition_description}"...',
     api_key: "",
     ...overrides,
   };

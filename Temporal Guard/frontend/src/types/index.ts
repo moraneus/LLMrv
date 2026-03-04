@@ -24,6 +24,9 @@ export interface Proposition {
   prop_id: string;
   description: string;
   role: "user" | "assistant";
+  few_shot_positive?: string[];
+  few_shot_negative?: string[];
+  few_shot_generated_at?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -84,8 +87,16 @@ export interface GroundingSettings {
   base_url: string;
   model: string;
   system_prompt: string;
-  user_prompt_template: string;
+  user_prompt_template_user: string;
+  user_prompt_template_assistant: string;
   api_key: string;
+}
+
+export interface GroundingPromptPreview {
+  prop_id: string;
+  role: "user" | "assistant";
+  system_prompt: string;
+  user_prompt: string;
 }
 
 export interface AppSettings {

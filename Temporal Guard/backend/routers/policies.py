@@ -6,14 +6,21 @@ CRUD for propositions and policies with formula validation.
 
 from __future__ import annotations
 
+import json
+import re
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from backend.engine.grounding import build_grounding_prompts
 from backend.engine.ptltl import ParseError, PropNode, parse
+from backend.models.chat import ChatMessage
 from backend.models.policy import Policy, Proposition
 from backend.routers.chat import invalidate_monitors
+from backend.routers.settings import _load_settings
+from backend.services.openrouter import OpenRouterClient, OpenRouterError
 from backend.store.db import DatabaseStore
 
 router = APIRouter(tags=["policies"])
@@ -39,6 +46,15 @@ class UpdatePropositionRequest(BaseModel):
 
     description: str | None = None
     role: str | None = None
+
+
+class GroundingPromptPreview(BaseModel):
+    """Rendered grounding prompt preview for a proposition."""
+
+    prop_id: str
+    role: str
+    system_prompt: str
+    user_prompt: str
 
 
 class CreatePolicyRequest(BaseModel):
@@ -72,6 +88,135 @@ def _extract_prop_ids(node) -> set[str]:
     return result
 
 
+def _parse_json_list_field(raw_value) -> list[str]:
+    if not raw_value:
+        return []
+    try:
+        parsed = json.loads(raw_value)
+        if isinstance(parsed, list):
+            return [str(x) for x in parsed if str(x).strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _row_to_proposition(row: dict) -> Proposition:
+    return Proposition(
+        prop_id=row["prop_id"],
+        description=row["description"],
+        role=row["role"],
+        few_shot_positive=_parse_json_list_field(row.get("few_shot_positive")),
+        few_shot_negative=_parse_json_list_field(row.get("few_shot_negative")),
+        few_shot_generated_at=row.get("few_shot_generated_at"),
+    )
+
+
+def _extract_json_object(text: str) -> dict | None:
+    t = (text or "").strip()
+    if not t:
+        return None
+
+    if t.startswith("```"):
+        lines = t.splitlines()
+        lines = [ln for ln in lines if not ln.strip().startswith("```")]
+        t = "\n".join(lines).strip()
+
+    try:
+        obj = json.loads(t)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+
+    match = re.search(r"\{[\s\S]*\}", t)
+    if not match:
+        return None
+    try:
+        obj = json.loads(match.group(0))
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        return None
+    return None
+
+
+def _parse_few_shot_examples(raw_response: str) -> tuple[list[str], list[str]]:
+    obj = _extract_json_object(raw_response)
+    if not obj:
+        raise ValueError("Could not parse JSON from chat model response")
+
+    pos = obj.get("positive_examples", [])
+    neg = obj.get("negative_examples", [])
+    if not isinstance(pos, list) or not isinstance(neg, list):
+        raise ValueError("Missing positive_examples/negative_examples arrays")
+
+    positives = [str(x).strip() for x in pos if str(x).strip()]
+    negatives = [str(x).strip() for x in neg if str(x).strip()]
+    if len(positives) < 5 or len(negatives) < 5:
+        raise ValueError("Need at least 5 positive and 5 tricky negative examples")
+    return positives[:5], negatives[:5]
+
+
+def _few_shot_generation_prompt(prop_description: str, role: str) -> str:
+    role_norm = (role or "user").strip().lower()
+    role_desc = "user messages" if role_norm == "user" else "assistant messages"
+    return (
+        "Create few-shot examples for proposition classification.\n\n"
+        'PROPOSITION: "{}"\n'
+        "ROLE: {}\n\n"
+        "Generate exactly:\n"
+        "1) 5 positive examples where proposition is clearly true.\n"
+        "2) 5 negative examples that are tricky: same domain/terms, but proposition is false.\n\n"
+        "Examples must be realistic {} and 1-2 sentences.\n\n"
+        "Return JSON exactly:\n"
+        "{{\n"
+        '  "positive_examples": ["...", "...", "...", "...", "..."],\n'
+        '  "negative_examples": ["...", "...", "...", "...", "..."]\n'
+        "}}"
+    ).format(prop_description, role_norm, role_desc)
+
+
+async def _generate_few_shots_with_chat_model(
+    openrouter_api_key: str,
+    chat_model: str,
+    proposition_description: str,
+    role: str,
+    retries: int = 3,
+) -> tuple[list[str], list[str]]:
+    if not openrouter_api_key:
+        raise HTTPException(
+            400,
+            "OpenRouter API key not configured. Configure Chat Model in Settings before adding propositions.",
+        )
+
+    client = OpenRouterClient(api_key=openrouter_api_key, model=chat_model)
+    system_prompt = (
+        "You generate synthetic few-shot examples for proposition matching. "
+        "Return ONLY valid JSON."
+    )
+    user_prompt = _few_shot_generation_prompt(proposition_description, role)
+
+    last_error = ""
+    for attempt in range(1, retries + 1):
+        try:
+            raw = await client.chat(
+                [
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt),
+                ]
+            )
+            return _parse_few_shot_examples(raw)
+        except (OpenRouterError, ValueError) as e:
+            last_error = str(e)
+            if attempt < retries:
+                continue
+
+    raise HTTPException(
+        502,
+        "Failed to generate few-shot examples using chat model: {}".format(last_error),
+    )
+
+
 async def _validate_formula(db: DatabaseStore, formula_str: str) -> tuple[list[str], str | None]:
     """Parse formula, validate prop references. Returns (prop_ids, error_or_none)."""
     try:
@@ -102,14 +247,7 @@ async def list_propositions(request: Request) -> list[Proposition]:
     """List all propositions."""
     db = _get_db(request)
     rows = await db.list_propositions()
-    return [
-        Proposition(
-            prop_id=r["prop_id"],
-            description=r["description"],
-            role=r["role"],
-        )
-        for r in rows
-    ]
+    return [_row_to_proposition(r) for r in rows]
 
 
 @router.post("/propositions", status_code=201)
@@ -132,9 +270,27 @@ async def create_proposition(request: Request, body: CreatePropositionRequest) -
     if existing:
         raise HTTPException(409, f"Proposition '{body.prop_id}' already exists.")
 
-    await db.create_proposition(body.prop_id, body.description, body.role)
+    settings = await _load_settings(db)
+    effective_chat_model = settings.openrouter_model_custom or settings.openrouter_model
+    few_shot_positive, few_shot_negative = await _generate_few_shots_with_chat_model(
+        openrouter_api_key=settings.openrouter_api_key,
+        chat_model=effective_chat_model,
+        proposition_description=body.description,
+        role=body.role,
+    )
+
+    generated_at = datetime.now(timezone.utc).isoformat()
+    await db.create_proposition(
+        body.prop_id,
+        body.description,
+        body.role,
+        few_shot_positive=few_shot_positive,
+        few_shot_negative=few_shot_negative,
+        few_shot_generated_at=generated_at,
+    )
     invalidate_monitors()
-    return Proposition(prop_id=body.prop_id, description=body.description, role=body.role)
+    created = await db.get_proposition(body.prop_id)
+    return _row_to_proposition(created)
 
 
 @router.put("/propositions/{prop_id}")
@@ -153,10 +309,39 @@ async def update_proposition(
     await db.update_proposition(prop_id, description=body.description, role=body.role)
     invalidate_monitors()
     updated = await db.get_proposition(prop_id)
-    return Proposition(
-        prop_id=updated["prop_id"],
-        description=updated["description"],
-        role=updated["role"],
+    return _row_to_proposition(updated)
+
+
+@router.get("/propositions/{prop_id}/grounding-prompt")
+async def proposition_grounding_prompt(
+    request: Request,
+    prop_id: str,
+    message_text: str | None = None,
+) -> GroundingPromptPreview:
+    """Render the full grounding prompt for a proposition."""
+    db = _get_db(request)
+    row = await db.get_proposition(prop_id)
+    if not row:
+        raise HTTPException(404, f"Proposition '{prop_id}' not found.")
+
+    proposition = _row_to_proposition(row)
+    settings = await _load_settings(db)
+    preview_message = (
+        message_text if message_text is not None else "<MESSAGE_TEXT_GOES_HERE>"
+    )
+    system_prompt, user_prompt = build_grounding_prompts(
+        proposition=proposition,
+        message_role=proposition.role,
+        message_text=preview_message,
+        system_prompt=settings.grounding.system_prompt,
+        user_prompt_template_user=settings.grounding.user_prompt_template_user,
+        user_prompt_template_assistant=settings.grounding.user_prompt_template_assistant,
+    )
+    return GroundingPromptPreview(
+        prop_id=proposition.prop_id,
+        role=proposition.role,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
     )
 
 
