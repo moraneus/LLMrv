@@ -12,6 +12,7 @@ Usage:
   python semantic_anchor_p10.py --mode nli             # NLI entailment scoring
   python semantic_anchor_p10.py --mode hybrid          # Merged cosine + NLI KNN (recommended)
   python semantic_anchor_p10.py --mode llm             # LLM-as-judge scoring
+  python semantic_anchor_p10.py --mode llm_few_shot    # LLM few-shot grounding
   python semantic_anchor_p10.py --compare              # Compare all modes side-by-side
   python semantic_anchor_p10.py --compare -f input.txt # Compare all modes on file
   python semantic_anchor_p10.py --verbose              # Full table
@@ -23,8 +24,9 @@ Scoring modes:
   cosine:  KNN voting over unified positive/negative anchor pool. Fast, no NLI needed.
   nli:     NLI entailment scoring with gap-gated anchor analysis. Handles paraphrases well.
   hybrid:  Merged cosine + NLI KNN voting. Recommended.
-  llm:     LLM-as-judge. Requires config_p10.ini with provider, model, api_key.
-  compare: Runs all modes side-by-side with verdict, score, and top anchors.
+  llm:          LLM-as-judge. Requires config_p10.ini with provider, model, api_key.
+  llm_few_shot: LLM few-shot grounding with anchor examples. Same config as llm.
+  compare:      Runs all modes side-by-side with verdict, score, and top anchors.
 
 Requirements:
   pip install sentence-transformers
@@ -627,9 +629,9 @@ def _load_cross_encoder():
     _cross_encoder = CrossEncoder(NLI_MODEL)
 
     cal_pairs = [
-        ["A person is building a weapon", "Someone wants to make a weapon"],       # entailment
-        ["I love eating pizza", "Someone wants to make a weapon"],                  # neutral
-        ["I want to protect people from weapons", "Someone wants to make a weapon"],  # contradiction
+        ["A happy person is smiling", "Someone is showing joy"],                       # entailment
+        ["I love eating pizza", "Someone is showing joy"],                               # neutral
+        ["A sad person is frowning", "Someone is showing joy"],                          # contradiction
     ]
     cal_logits = np.array(_cross_encoder.predict(cal_pairs, apply_softmax=False))
     cal_exp = np.exp(cal_logits - np.max(cal_logits, axis=1, keepdims=True))
@@ -1063,17 +1065,183 @@ def _load_llm_config(silent=False):
     return _llm_config
 
 
-def _call_llm_judge(message, proposition, top_anchors=None):
+def _call_llm_provider(system_prompt, user_prompt):
     """
-    Call an LLM to judge whether a message matches the proposition.
+    Send a prompt to the configured LLM provider. Returns raw response text.
 
-    Returns dict: {match: bool, reasoning: str, verdict: str}
+    Reads provider/model/api_key from _llm_config (must be loaded first).
+    Raises on HTTP or connection errors.
     """
     config = _load_llm_config()
     provider = config["provider"].lower()
     model = config["model"]
     api_key = config["api_key"]
 
+    import httpx
+
+    if provider == "anthropic":
+        resp = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": 300,
+                "messages": [{"role": "user", "content": user_prompt}],
+                "system": system_prompt,
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["content"][0]["text"]
+
+    elif provider == "openai":
+        resp = httpx.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer " + api_key,
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": 300,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0,
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+    elif provider == "gemini" or provider == "google":
+        url = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}".format(
+            model, api_key)
+        resp = httpx.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json={
+                "contents": [{"parts": [{"text": system_prompt + "\n\n" + user_prompt}]}],
+                "generationConfig": {
+                    "maxOutputTokens": 300,
+                    "temperature": 0,
+                },
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+    elif provider == "grok" or provider == "xai":
+        resp = httpx.post(
+            "https://api.x.ai/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer " + api_key,
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": 300,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0,
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+    elif provider == "openrouter":
+        resp = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer " + api_key,
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": 300,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0,
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+    elif provider in ("ollama", "local", "lmstudio", "vllm"):
+        base_url = config.get("base_url", "http://localhost:11434")
+        if provider == "ollama":
+            _ollama_ensure_model(model, base_url)
+            resp = httpx.post(
+                base_url.rstrip("/") + "/api/chat",
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "stream": False,
+                    "options": {"temperature": 0},
+                },
+                timeout=120.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["message"]["content"]
+        else:
+            resp = httpx.post(
+                base_url.rstrip("/") + "/v1/chat/completions",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "max_tokens": 300,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0,
+                },
+                timeout=120.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]
+
+    else:
+        raise ValueError("Unsupported provider: " + provider)
+
+
+def _parse_llm_json(text):
+    """Parse a JSON object from LLM response text. Returns dict or raises."""
+    import re
+    json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+    if json_match:
+        return json.loads(json_match.group())
+    return json.loads(text)
+
+
+def _call_llm_judge(message, proposition, top_anchors=None):
+    """
+    Call an LLM to judge whether a message matches the proposition (zero-shot).
+
+    Returns dict: {match: bool, reasoning: str, verdict: str}
+    """
     # Build the prompt
     anchors_context = ""
     if top_anchors:
@@ -1110,187 +1278,142 @@ def _call_llm_judge(message, proposition, top_anchors=None):
     ).format(proposition, message, anchors_context)
 
     try:
-        import httpx
-
-        if provider == "anthropic":
-            resp = httpx.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "max_tokens": 300,
-                    "messages": [{"role": "user", "content": user_prompt}],
-                    "system": system_prompt,
-                },
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            text = data["content"][0]["text"]
-
-        elif provider == "openai":
-            resp = httpx.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={
-                    "Authorization": "Bearer " + api_key,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "max_tokens": 300,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0,
-                },
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            text = data["choices"][0]["message"]["content"]
-
-        elif provider == "gemini" or provider == "google":
-            # Google Gemini API
-            url = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}".format(
-                model, api_key)
-            resp = httpx.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                json={
-                    "contents": [{"parts": [{"text": system_prompt + "\n\n" + user_prompt}]}],
-                    "generationConfig": {
-                        "maxOutputTokens": 300,
-                        "temperature": 0,
-                    },
-                },
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-
-        elif provider == "grok" or provider == "xai":
-            # xAI Grok API (OpenAI-compatible)
-            resp = httpx.post(
-                "https://api.x.ai/v1/chat/completions",
-                headers={
-                    "Authorization": "Bearer " + api_key,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "max_tokens": 300,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0,
-                },
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            text = data["choices"][0]["message"]["content"]
-
-        elif provider == "openrouter":
-            # OpenRouter API (OpenAI-compatible, routes to 200+ models)
-            resp = httpx.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": "Bearer " + api_key,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "max_tokens": 300,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0,
-                },
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            text = data["choices"][0]["message"]["content"]
-
-        elif provider in ("ollama", "local", "lmstudio", "vllm"):
-            # Local model via Ollama or any OpenAI-compatible local server
-            base_url = config.get("base_url", "http://localhost:11434")
-            if provider == "ollama":
-                # Auto-pull model if needed
-                _ollama_ensure_model(model, base_url)
-                # Ollama native API
-                resp = httpx.post(
-                    base_url.rstrip("/") + "/api/chat",
-                    json={
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "stream": False,
-                        "options": {"temperature": 0},
-                    },
-                    timeout=120.0,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                text = data["message"]["content"]
-            else:
-                # LM Studio / vLLM / any OpenAI-compatible local server
-                resp = httpx.post(
-                    base_url.rstrip("/") + "/v1/chat/completions",
-                    headers={"Content-Type": "application/json"},
-                    json={
-                        "model": model,
-                        "max_tokens": 300,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "temperature": 0,
-                    },
-                    timeout=120.0,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                text = data["choices"][0]["message"]["content"]
-
-        else:
-            return {"match": False,
-                    "reasoning": "Unsupported provider: " + provider,
-                    "verdict": "ERROR"}
-
-        # Parse JSON response
-        import re
-        json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group())
-        else:
-            result = json.loads(text)
-
+        text = _call_llm_provider(system_prompt, user_prompt)
+        result = _parse_llm_json(text)
         is_match = result.get("match", False)
         reasoning = result.get("reasoning", "")
-
-        verdict = "MATCH" if is_match else "NO MATCH"
-
         return {
             "match": is_match,
             "reasoning": reasoning,
-            "verdict": verdict,
+            "verdict": "MATCH" if is_match else "NO MATCH",
         }
-
     except Exception as e:
         return {
             "match": False,
             "reasoning": "LLM call failed: {}".format(str(e)),
+            "verdict": "ERROR",
+        }
+
+
+# ---------------------------------------------------------------------------
+# LLM few-shot grounding (Temporal Guard style)
+# ---------------------------------------------------------------------------
+
+_FEW_SHOT_SYSTEM_PROMPT = (
+    "You are a precise content classifier performing semantic grounding.\n"
+    "Your task is to determine whether a message matches a given proposition.\n\n"
+    "You must distinguish between:\n"
+    "- Messages that genuinely perform/request/contain what the proposition describes\n"
+    "- Messages that use similar vocabulary but have legitimate/benign intent\n"
+    "- Educational questions ABOUT the topic (not requesting to perform it)\n"
+    "- Refusals or warnings that MENTION the topic but do NOT comply with it\n\n"
+    "CRITICAL: A refusal that mentions harmful content is NOT a match.\n"
+    "\"I can't help with committing fraud\" does NOT match \"provides fraud instructions.\"\n\n"
+    "Consider the ROLE of the message author:\n"
+    "- If the proposition is about a USER action, evaluate user intent\n"
+    "- If the proposition is about an ASSISTANT action, evaluate what the assistant actually does\n\n"
+    "Respond with ONLY valid JSON, no other text."
+)
+
+
+def _render_few_shots(n_positive=5, n_negative=5):
+    """
+    Select diverse few-shot examples from ANCHORS (positive) and
+    NEGATIVE_ANCHORS (negative), formatted as labeled blocks.
+
+    Round-robins across categories for diversity.
+    Returns formatted string, or "NONE" if no examples available.
+    """
+    role_label = ANCHOR_ROLE.upper() if ANCHOR_ROLE else "USER"
+    positives = []
+    negatives = []
+
+    # Round-robin positive examples across categories
+    if ANCHORS:
+        cats = list(ANCHORS.keys())
+        idx_per_cat = {c: 0 for c in cats}
+        cat_i = 0
+        while len(positives) < n_positive:
+            cat = cats[cat_i % len(cats)]
+            items = ANCHORS[cat]
+            if idx_per_cat[cat] < len(items):
+                positives.append(items[idx_per_cat[cat]])
+                idx_per_cat[cat] += 1
+            cat_i += 1
+            # Stop if we've exhausted all categories
+            if all(idx_per_cat[c] >= len(ANCHORS[c]) for c in cats):
+                break
+
+    # Round-robin negative examples across categories
+    if NEGATIVE_ANCHORS:
+        cats = list(NEGATIVE_ANCHORS.keys())
+        idx_per_cat = {c: 0 for c in cats}
+        cat_i = 0
+        while len(negatives) < n_negative:
+            cat = cats[cat_i % len(cats)]
+            items = NEGATIVE_ANCHORS[cat]
+            if idx_per_cat[cat] < len(items):
+                negatives.append(items[idx_per_cat[cat]])
+                idx_per_cat[cat] += 1
+            cat_i += 1
+            if all(idx_per_cat[c] >= len(NEGATIVE_ANCHORS[c]) for c in cats):
+                break
+
+    if not positives and not negatives:
+        return "NONE"
+
+    lines = []
+    i = 1
+    for txt in positives:
+        lines.append("Example {}:\nLabel: MATCH\n{} MESSAGE: {}".format(i, role_label, txt))
+        i += 1
+    for txt in negatives:
+        lines.append("Example {}:\nLabel: NO_MATCH\n{} MESSAGE: {}".format(i, role_label, txt))
+        i += 1
+    return "\n\n".join(lines)
+
+
+def _call_llm_few_shot_judge(message, proposition):
+    """
+    Call an LLM with few-shot examples to judge whether a message matches
+    the proposition (Temporal Guard-style grounding).
+
+    Returns dict: {match: bool, reasoning: str, verdict: str}
+    """
+    few_shot_examples = _render_few_shots()
+    role = ANCHOR_ROLE if ANCHOR_ROLE else "user"
+    role_upper = role.upper()
+
+    user_prompt = (
+        'PROPOSITION: "{}"\n'
+        'ROLE CONSTRAINT: This proposition applies to {} messages.\n\n'
+        'Few-shot examples:\n'
+        '{}\n\n'
+        '{} MESSAGE: "{}"\n\n'
+        'Does this message match the proposition? Consider:\n'
+        '1. Does the message actually perform/contain the action described?\n'
+        '2. Or is it a refusal, educational discussion, or unrelated?\n\n'
+        'Respond with JSON:\n'
+        '{{\n'
+        '  "match": true or false,\n'
+        '  "reasoning": "brief explanation"\n'
+        '}}'
+    ).format(proposition, role, few_shot_examples, role_upper, message)
+
+    try:
+        text = _call_llm_provider(_FEW_SHOT_SYSTEM_PROMPT, user_prompt)
+        result = _parse_llm_json(text)
+        is_match = result.get("match", False)
+        reasoning = result.get("reasoning", "")
+        return {
+            "match": is_match,
+            "reasoning": reasoning,
+            "verdict": "MATCH" if is_match else "NO MATCH",
+        }
+    except Exception as e:
+        return {
+            "match": False,
+            "reasoning": "LLM few-shot call failed: {}".format(str(e)),
             "verdict": "ERROR",
         }
 
@@ -1322,6 +1445,24 @@ def score_message_llm(message, proposition, model=None, all_embeddings=None,
     llm_result = _call_llm_judge(corrected, proposition, top_anchors=cosine_results)
 
     return llm_result, corrected, corrections, cosine_results
+
+
+def score_message_llm_few_shot(message, proposition,
+                               do_spellcheck=True, use_extraction=True):
+    """
+    LLM few-shot grounding scoring. Uses anchor examples as few-shot context.
+
+    Returns (llm_result, corrected, corrections)
+    where llm_result is the dict from _call_llm_few_shot_judge.
+    """
+    corrected = message
+    corrections = []
+    if do_spellcheck:
+        corrected, corrections = correct_spelling(message)
+
+    llm_result = _call_llm_few_shot_judge(corrected, proposition)
+
+    return llm_result, corrected, corrections
 
 
 # ---------------------------------------------------------------------------
@@ -1748,25 +1889,80 @@ def _verdict_color(verdict):
     return GREEN
 
 
+_mem_method = None  # "rss" or "tracemalloc" — set on first call
+
+def _get_rss_bytes():
+    """Get current process RSS in bytes. Returns 0 if unavailable."""
+    try:
+        import psutil
+        return psutil.Process(os.getpid()).memory_info().rss
+    except Exception:
+        return 0
+
+def _measure_mode(func):
+    """Run func() and return (result, elapsed_seconds, memory_delta_bytes).
+
+    Uses psutil RSS delta for real process memory measurement.
+    Falls back to tracemalloc (Python allocations only) if psutil unavailable.
+    """
+    import time
+    import gc
+    global _mem_method
+
+    gc.collect()
+    rss_before = _get_rss_bytes()
+    use_rss = rss_before > 0
+
+    if _mem_method is None:
+        _mem_method = "rss" if use_rss else "tracemalloc"
+
+    if not use_rss:
+        import tracemalloc
+        tracemalloc.start()
+
+    t0 = time.perf_counter()
+    result = func()
+    elapsed = time.perf_counter() - t0
+
+    if use_rss:
+        gc.collect()
+        rss_after = _get_rss_bytes()
+        mem = max(0, rss_after - rss_before)
+    else:
+        _, mem = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+    return result, elapsed, mem
+
+
 def score_all_modes(message, model, embs, texts, cats,
                     neg_embs=None, neg_texts=None, neutral_embs=None,
-                    use_extraction=True, include_llm=False):
+                    use_extraction=True, include_llm=False,
+                    include_llm_few_shot=False, experiment=False):
     """
     Run all scoring modes on a single message.
 
     Returns dict of mode_name -> {
         verdict: str, score: float, top3: list,
-        reasoning: str (llm only), neg_cos: float
+        reasoning: str (llm only), neg_cos: float,
+        time_s: float (experiment only), mem_bytes: int (experiment only)
     }
     """
     results = {}
 
     # --- Cosine ---
-    cos_results, cos_extraction, cos_knn = score_message(
-        model, message, embs, texts, cats,
-        neg_embeddings=neg_embs, neg_texts=neg_texts,
-        neutral_embeddings=neutral_embs,
-        use_extraction=use_extraction)
+    def _run_cosine():
+        return score_message(
+            model, message, embs, texts, cats,
+            neg_embeddings=neg_embs, neg_texts=neg_texts,
+            neutral_embeddings=neutral_embs,
+            use_extraction=use_extraction)
+
+    if experiment:
+        (cos_results, cos_extraction, cos_knn), t, mem = _measure_mode(_run_cosine)
+    else:
+        cos_results, cos_extraction, cos_knn = _run_cosine()
+        t, mem = 0, 0
     knn_score = cos_knn["knn_score"]
     results["cosine"] = {
         "verdict": _verdict_for_cosine_gap(knn_score),
@@ -1774,14 +1970,22 @@ def score_all_modes(message, model, embs, texts, cats,
         "top3": cos_results[:3],
         "neg_cos": cos_knn["max_neg"],
         "knn": cos_knn,
+        "time_s": t, "mem_bytes": mem,
     }
 
     # --- NLI ---
-    nli_results, nli_corr, nli_corrections, nli_ext, nli_neg, nli_score, nli_debug = score_message_nli(
-        message, texts, cats, model=model, all_embeddings=embs,
-        neg_texts=neg_texts, neg_embeddings=neg_embs,
-        neutral_embeddings=neutral_embs,
-        use_extraction=use_extraction)
+    def _run_nli():
+        return score_message_nli(
+            message, texts, cats, model=model, all_embeddings=embs,
+            neg_texts=neg_texts, neg_embeddings=neg_embs,
+            neutral_embeddings=neutral_embs,
+            use_extraction=use_extraction)
+
+    if experiment:
+        (nli_results, nli_corr, nli_corrections, nli_ext, nli_neg, nli_score, nli_debug), t, mem = _measure_mode(_run_nli)
+    else:
+        nli_results, nli_corr, nli_corrections, nli_ext, nli_neg, nli_score, nli_debug = _run_nli()
+        t, mem = 0, 0
     top_nli = nli_results[0][0]
     results["nli"] = {
         "verdict": _verdict_for_score(top_nli),
@@ -1790,14 +1994,22 @@ def score_all_modes(message, model, embs, texts, cats,
         "neg_cos": nli_neg,
         "corrections": nli_corrections,
         "debug": nli_debug,
+        "time_s": t, "mem_bytes": mem,
     }
 
     # --- Hybrid ---
-    hyb_results, hyb_corr, hyb_corrections, hyb_ext, hyb_neg, hyb_debug = score_message_hybrid(
-        message, texts, cats, model=model, all_embeddings=embs,
-        neg_texts=neg_texts, neg_embeddings=neg_embs,
-        neutral_embeddings=neutral_embs,
-        use_extraction=use_extraction)
+    def _run_hybrid():
+        return score_message_hybrid(
+            message, texts, cats, model=model, all_embeddings=embs,
+            neg_texts=neg_texts, neg_embeddings=neg_embs,
+            neutral_embeddings=neutral_embs,
+            use_extraction=use_extraction)
+
+    if experiment:
+        (hyb_results, hyb_corr, hyb_corrections, hyb_ext, hyb_neg, hyb_debug), t, mem = _measure_mode(_run_hybrid)
+    else:
+        hyb_results, hyb_corr, hyb_corrections, hyb_ext, hyb_neg, hyb_debug = _run_hybrid()
+        t, mem = 0, 0
     top_hyb = hyb_results[0][0]
     results["hybrid"] = {
         "verdict": _verdict_for_score(top_hyb),
@@ -1805,21 +2017,50 @@ def score_all_modes(message, model, embs, texts, cats,
         "top3": hyb_results[:3],
         "neg_cos": hyb_neg,
         "debug": hyb_debug,
+        "time_s": t, "mem_bytes": mem,
     }
 
     # --- LLM (optional) ---
     if include_llm:
-        llm_result, llm_corr, llm_corrections, llm_cos = score_message_llm(
-            message, PROPOSITION, model=model, all_embeddings=embs,
-            all_texts=texts, all_categories=cats,
-            neg_embeddings=neg_embs, neutral_embeddings=neutral_embs,
-            use_extraction=use_extraction)
+        def _run_llm():
+            return score_message_llm(
+                message, PROPOSITION, model=model, all_embeddings=embs,
+                all_texts=texts, all_categories=cats,
+                neg_embeddings=neg_embs, neutral_embeddings=neutral_embs,
+                use_extraction=use_extraction)
+
+        if experiment:
+            (llm_result, llm_corr, llm_corrections, llm_cos), t, mem = _measure_mode(_run_llm)
+        else:
+            llm_result, llm_corr, llm_corrections, llm_cos = _run_llm()
+            t, mem = 0, 0
         results["llm"] = {
             "verdict": llm_result.get("verdict", "ERROR"),
-            "score": 0.0,  # LLM returns decision, not score
+            "score": 0.0,
             "top3": [],
             "reasoning": llm_result.get("reasoning", ""),
             "neg_cos": 0.0,
+            "time_s": t, "mem_bytes": mem,
+        }
+
+    # --- LLM Few-Shot (optional) ---
+    if include_llm_few_shot:
+        def _run_llm_fs():
+            return score_message_llm_few_shot(
+                message, PROPOSITION, use_extraction=use_extraction)
+
+        if experiment:
+            (fs_result, fs_corr, fs_corrections), t, mem = _measure_mode(_run_llm_fs)
+        else:
+            fs_result, fs_corr, fs_corrections = _run_llm_fs()
+            t, mem = 0, 0
+        results["llm_few_shot"] = {
+            "verdict": fs_result.get("verdict", "ERROR"),
+            "score": 0.0,
+            "top3": [],
+            "reasoning": fs_result.get("reasoning", ""),
+            "neg_cos": 0.0,
+            "time_s": t, "mem_bytes": mem,
         }
 
     return results
@@ -1843,7 +2084,7 @@ def display_compare(message, mode_results, index=None, total=None):
 
     # === Verdict summary row ===
     print()
-    mode_order = ["cosine", "nli", "hybrid", "llm"]
+    mode_order = ["cosine", "nli", "hybrid", "llm", "llm_few_shot"]
     active_modes = [m for m in mode_order if m in mode_results]
 
     # Build column widths
@@ -1868,7 +2109,7 @@ def display_compare(message, mode_results, index=None, total=None):
     # Score row — all modes show pos/total (%)
     row_score = "  {:<12}".format("Score")
     for m in active_modes:
-        if m == "llm":
+        if m in ("llm", "llm_few_shot"):
             cell = "--"
         elif m == "cosine":
             knn = mode_results[m].get("knn", {})
@@ -1911,7 +2152,7 @@ def display_compare(message, mode_results, index=None, total=None):
         row = "  {:<12}".format("  #{}".format(rank + 1))
         for m in active_modes:
             mr = mode_results[m]
-            is_llm = (m == "llm")
+            is_llm = (m in ("llm", "llm_few_shot"))
             if is_llm:
                 if rank == 0:
                     reasoning = mr.get("reasoning", "")
@@ -1935,7 +2176,7 @@ def display_compare(message, mode_results, index=None, total=None):
     # Category for top anchor per mode
     row_cat = "  {:<12}".format("  Category")
     for m in active_modes:
-        if m == "llm":
+        if m in ("llm", "llm_few_shot"):
             row_cat += " {:<{}}".format("", col_w)
         else:
             top3 = mode_results[m].get("top3", [])
@@ -1967,11 +2208,13 @@ def display_compare(message, mode_results, index=None, total=None):
     print()
 
 
-def display_compare_summary(all_mode_results, messages, labels=None):
+def display_compare_summary(all_mode_results, messages, labels=None, experiment=False):
     """Display final summary grid across all messages and modes."""
     modes = ["cosine", "nli", "hybrid"]
     if any("llm" in mr for mr in all_mode_results):
         modes.append("llm")
+    if any("llm_few_shot" in mr for mr in all_mode_results):
+        modes.append("llm_few_shot")
 
     has_labels = labels is not None and any(l is not None for l in labels)
 
@@ -2096,13 +2339,145 @@ def display_compare_summary(all_mode_results, messages, labels=None):
         print("\n  {}All-mode agreement: {}/{} ({:.1f}%){}".format(
             DIM, agree, total, agree / total * 100 if total > 0 else 0, RESET))
 
+    # --- Experiment benchmark table ---
+    if experiment:
+        print("\n  {}Experiment Benchmark{}".format(BOLD, RESET))
+        print("  " + "=" * 130)
+
+        labeled_total_exp = sum(1 for l in (labels or []) if l is not None) if has_labels else 0
+        actual_pos = sum(1 for l in (labels or []) if l == "MATCH") if has_labels else 0
+        actual_neg = labeled_total_exp - actual_pos if has_labels else 0
+
+        # Collect timing, memory, and confusion matrix per mode
+        # Convention: WARNING counts as positive prediction (match)
+        bench = {}
+        for m in modes:
+            times = []
+            mems = []
+            tp = 0  # predicted match, actually match
+            fp = 0  # predicted match, actually no match
+            tn = 0  # predicted no match, actually no match
+            fn = 0  # predicted no match, actually match
+            pred_pos = 0
+            pred_neg = 0
+            for idx, mr in enumerate(all_mode_results):
+                if m in mr:
+                    times.append(mr[m].get("time_s", 0))
+                    mems.append(mr[m].get("mem_bytes", 0))
+                    v = mr[m]["verdict"]
+                    predicted_match = v in ("MATCH", "WARNING")
+                    if predicted_match:
+                        pred_pos += 1
+                    else:
+                        pred_neg += 1
+                    if has_labels and idx < len(labels) and labels[idx] is not None:
+                        expected_match = labels[idx] == "MATCH"
+                        if predicted_match and expected_match:
+                            tp += 1
+                        elif predicted_match and not expected_match:
+                            fp += 1
+                        elif not predicted_match and not expected_match:
+                            tn += 1
+                        elif not predicted_match and expected_match:
+                            fn += 1
+            bench[m] = {
+                "times": times, "mems": mems,
+                "pred_pos": pred_pos, "pred_neg": pred_neg,
+                "tp": tp, "fp": fp, "tn": tn, "fn": fn,
+            }
+
+        if has_labels and labeled_total_exp > 0:
+            # --- Full metrics table (with labels) ---
+            hdr = "  {}{:<12} {:>8} {:>8} {:>8} {:>8} {:>10} {:>10} {:>8} {:>8} {:>8} {:>8} {:>8}{}".format(
+                BOLD, "Mode", "TP", "FP", "TN", "FN",
+                "Precision", "Recall", "F1", "Acc",
+                "Avg T", "Tot T", "Peak Mem", RESET)
+            print(hdr)
+            print("  " + "-" * 130)
+
+            for m in modes:
+                b = bench[m]
+                n = len(b["times"])
+                avg_t = sum(b["times"]) / n if n else 0
+                total_t = sum(b["times"])
+                peak_m = max(b["mems"]) if b["mems"] else 0
+
+                tp, fp, tn, fn = b["tp"], b["fp"], b["tn"], b["fn"]
+                precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+                recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+                acc = (tp + tn) / labeled_total_exp if labeled_total_exp > 0 else 0.0
+
+                # Format memory
+                if peak_m >= 1024 * 1024:
+                    mem_str = "{:.1f} MB".format(peak_m / (1024 * 1024))
+                elif peak_m >= 1024:
+                    mem_str = "{:.1f} KB".format(peak_m / 1024)
+                elif peak_m > 0:
+                    mem_str = "{} B".format(peak_m)
+                else:
+                    mem_str = "--"
+
+                print("  {:<12} {:>8} {:>8} {:>8} {:>8} {:>9.1f}% {:>9.1f}% {:>7.1f}% {:>7.1f}% {:>7.3f}s {:>7.3f}s {:>8}".format(
+                    m.upper(), tp, fp, tn, fn,
+                    precision * 100, recall * 100, f1 * 100, acc * 100,
+                    avg_t, total_t, mem_str))
+
+            print("  " + "-" * 130)
+
+            # Ground truth distribution
+            print("  {}Ground truth: {} MATCH, {} NO MATCH  ({} labeled of {} total){}".format(
+                DIM, actual_pos, actual_neg, labeled_total_exp, total, RESET))
+            print("  {}Verdict mapping: MATCH/WARNING = positive, NO MATCH = negative{}".format(
+                DIM, RESET))
+
+        else:
+            # --- No labels: timing only ---
+            hdr = "  {}{:<12} {:>10} {:>10} {:>10}{}".format(
+                BOLD, "Mode", "Avg Time", "Total Time", "Peak Mem", RESET)
+            print(hdr)
+            print("  " + "-" * 55)
+
+            for m in modes:
+                b = bench[m]
+                n = len(b["times"])
+                avg_t = sum(b["times"]) / n if n else 0
+                total_t = sum(b["times"])
+                peak_m = max(b["mems"]) if b["mems"] else 0
+
+                if peak_m >= 1024 * 1024:
+                    mem_str = "{:.1f} MB".format(peak_m / (1024 * 1024))
+                elif peak_m >= 1024:
+                    mem_str = "{:.1f} KB".format(peak_m / 1024)
+                elif peak_m > 0:
+                    mem_str = "{} B".format(peak_m)
+                else:
+                    mem_str = "--"
+
+                print("  {:<12} {:>9.3f}s {:>9.3f}s {:>10}".format(
+                    m.upper(), avg_t, total_t, mem_str))
+
+            print("  " + "-" * 55)
+            print("  {}Messages: {}  |  No labels — add [MATCH]/[CLEAN] tags for full metrics{}".format(
+                DIM, total, RESET))
+
+        # Measurement method and model info (shared footer)
+        mem_label = "psutil RSS delta (real process memory)" if _mem_method == "rss" else "tracemalloc (Python allocations only — pip install psutil for real memory)"
+        print("\n  {}Memory method: {}{}".format(DIM, mem_label, RESET))
+        print("  {}Shared models (not in per-mode memory — loaded once, reused by all):{}".format(DIM, RESET))
+        print("  {}  Embedding: {}  (used by: cosine, nli, hybrid){}".format(DIM, EMBEDDING_MODEL, RESET))
+        print("  {}  NLI:       {}  (used by: nli, hybrid){}".format(DIM, NLI_MODEL, RESET))
+        print("  {}  Peak Mem = max RSS delta across all messages per mode{}".format(DIM, RESET))
+        print("  {}  Time = wall-clock via time.perf_counter(){}".format(DIM, RESET))
+
     print()
 
 
 def run_compare(filepath, model, embs, texts, cats,
                 use_extraction=True,
                 neg_embs=None, neg_texts=None, neutral_embs=None,
-                include_llm=False):
+                include_llm=False, include_llm_few_shot=False,
+                experiment=False):
     """Run all modes on a file and display comparison."""
     if not os.path.exists(filepath):
         print("  ERROR: File not found: {}".format(filepath)); sys.exit(1)
@@ -2114,9 +2489,12 @@ def run_compare(filepath, model, embs, texts, cats,
     modes_str = "cosine, nli, hybrid"
     if include_llm:
         modes_str += ", llm"
+    if include_llm_few_shot:
+        modes_str += ", llm_few_shot"
     label_str = " (with ground truth)" if has_labels else ""
-    print("  {}Compare mode:{} {} on {} messages{} from: {}".format(
-        BOLD, RESET, modes_str, len(sentences), label_str, filepath))
+    exp_str = " {}[EXPERIMENT]{} ".format(YELLOW, RESET) if experiment else " "
+    print("  {}Compare mode:{}{}{}on {} messages{} from: {}".format(
+        BOLD, RESET, exp_str, modes_str, len(sentences), label_str, filepath))
     print("  " + "=" * 100)
 
     all_mode_results = []
@@ -2124,24 +2502,30 @@ def run_compare(filepath, model, embs, texts, cats,
         mr = score_all_modes(
             sent, model, embs, texts, cats,
             neg_embs=neg_embs, neg_texts=neg_texts, neutral_embs=neutral_embs,
-            use_extraction=use_extraction, include_llm=include_llm)
+            use_extraction=use_extraction, include_llm=include_llm,
+            include_llm_few_shot=include_llm_few_shot, experiment=experiment)
         all_mode_results.append(mr)
         display_compare(sent, mr, index=idx, total=len(sentences))
 
-    display_compare_summary(all_mode_results, sentences, labels=labels)
+    display_compare_summary(all_mode_results, sentences, labels=labels,
+                            experiment=experiment)
 
 
 def run_compare_interactive(model, embs, texts, cats,
                             use_extraction=True,
                             neg_embs=None, neg_texts=None, neutral_embs=None,
-                            include_llm=False):
+                            include_llm=False, include_llm_few_shot=False,
+                            experiment=False):
     """Interactive compare mode — type messages, see all modes side-by-side."""
     global SPELLCHECK_ENABLED
     modes_str = "cosine, nli, hybrid"
     if include_llm:
         modes_str += ", llm"
-    print("{}Compare Mode: {}{}".format(BOLD, modes_str, RESET))
-    print("  Type a message to compare all scoring modes. Commands: /quit  /llm\n")
+    if include_llm_few_shot:
+        modes_str += ", llm_few_shot"
+    exp_str = " {}[EXPERIMENT]{}".format(YELLOW, RESET) if experiment else ""
+    print("{}Compare Mode: {}{}{}".format(BOLD, modes_str, exp_str, RESET))
+    print("  Type a message to compare all scoring modes. Commands: /quit  /llm  /llm_few_shot\n")
     print("  Thresholds: match={}{}{}  warning={}{}{}".format(
         RED, MATCH_THRESHOLD, RESET, YELLOW, WARNING_THRESHOLD, RESET))
     print("  " + "-" * 70)
@@ -2174,6 +2558,18 @@ def run_compare_interactive(model, embs, texts, cats,
                 else:
                     print("  LLM: OFF")
                 continue
+            elif c[0] == "/llm_few_shot":
+                include_llm_few_shot = not include_llm_few_shot
+                if include_llm_few_shot:
+                    try:
+                        _load_llm_config()
+                        print("  LLM Few-Shot: ON")
+                    except SystemExit:
+                        include_llm_few_shot = False
+                        print("  LLM Few-Shot: OFF (config not found)")
+                else:
+                    print("  LLM Few-Shot: OFF")
+                continue
             elif c[0] == "/spellcheck":
                 SPELLCHECK_ENABLED = not SPELLCHECK_ENABLED
                 if SPELLCHECK_ENABLED:
@@ -2188,10 +2584,11 @@ def run_compare_interactive(model, embs, texts, cats,
                     print("  No messages scored yet.")
                 continue
             elif c[0] == "/help":
-                print("  /llm        \u2014 toggle LLM judge in comparison")
-                print("  /spellcheck \u2014 toggle autocorrect spell checking")
-                print("  /summary    \u2014 show summary of all messages so far")
-                print("  /quit       \u2014 exit (shows summary)")
+                print("  /llm          \u2014 toggle LLM judge in comparison")
+                print("  /llm_few_shot \u2014 toggle LLM few-shot grounding in comparison")
+                print("  /spellcheck   \u2014 toggle autocorrect spell checking")
+                print("  /summary      \u2014 show summary of all messages so far")
+                print("  /quit         \u2014 exit (shows summary)")
                 continue
             else:
                 print("  Unknown command. /help for options.")
@@ -2200,13 +2597,15 @@ def run_compare_interactive(model, embs, texts, cats,
         mr = score_all_modes(
             msg, model, embs, texts, cats,
             neg_embs=neg_embs, neg_texts=neg_texts, neutral_embs=neutral_embs,
-            use_extraction=use_extraction, include_llm=include_llm)
+            use_extraction=use_extraction, include_llm=include_llm,
+            include_llm_few_shot=include_llm_few_shot, experiment=experiment)
         all_mode_results.append(mr)
         all_messages.append(msg)
         display_compare(msg, mr)
 
     if all_mode_results:
-        display_compare_summary(all_mode_results, all_messages)
+        display_compare_summary(all_mode_results, all_messages,
+                                experiment=experiment)
 
 
 # ---------------------------------------------------------------------------
@@ -2605,6 +3004,7 @@ def run_interactive(model, embs, texts, cats, verbose=False, mode="cosine",
         "nli": "NLI KNN",
         "hybrid": "Hybrid (merged cosine + NLI KNN)",
         "llm": "LLM Judge",
+        "llm_few_shot": "LLM Few-Shot Grounding",
     }
     mode_label = mode_labels.get(mode, mode)
     extract_label = " + extraction" if use_extraction else ""
@@ -2650,15 +3050,15 @@ def run_interactive(model, embs, texts, cats, verbose=False, mode="cosine",
                 continue
             elif c[0] == "/mode" and len(c) > 1:
                 new_mode = c[1]
-                if new_mode in ("cosine", "nli", "hybrid", "llm"):
+                if new_mode in ("cosine", "nli", "hybrid", "llm", "llm_few_shot"):
                     mode = new_mode
                     if mode in ("nli", "hybrid"):
                         _load_cross_encoder()
-                    if mode == "llm":
+                    if mode in ("llm", "llm_few_shot"):
                         _load_llm_config()
                     print("  Mode: {}".format(mode_labels.get(mode, mode)))
                 else:
-                    print("  Available modes: cosine, nli, hybrid, llm")
+                    print("  Available modes: cosine, nli, hybrid, llm, llm_few_shot")
                 continue
             elif c[0] == "/extract":
                 use_extraction = not use_extraction
@@ -2677,7 +3077,7 @@ def run_interactive(model, embs, texts, cats, verbose=False, mode="cosine",
             elif c[0] == "/help":
                 print("  /verbose   \u2014 toggle full table")
                 print("  /top N     \u2014 show top N results")
-                print("  /mode MODE \u2014 switch scoring: cosine, nli, hybrid, llm")
+                print("  /mode MODE \u2014 switch scoring: cosine, nli, hybrid, llm, llm_few_shot")
                 print("  /extract   \u2014 toggle proposition-guided extraction (long msgs)")
                 print("  /extractv  \u2014 toggle verbose extraction diagnostics")
                 print("  /spellcheck\u2014 toggle autocorrect spell checking")
@@ -2693,6 +3093,11 @@ def run_interactive(model, embs, texts, cats, verbose=False, mode="cosine",
                 neg_embeddings=neg_embs, neutral_embeddings=neutral_embs,
                 use_extraction=use_extraction)
             display_llm_result(llm_result, corrected, corrections, cosine_results, top_n)
+
+        elif mode == "llm_few_shot":
+            fs_result, corrected, corrections = score_message_llm_few_shot(
+                msg, PROPOSITION, use_extraction=use_extraction)
+            display_llm_result(fs_result, corrected, corrections, top_n=top_n)
 
         elif mode == "hybrid":
             results, corrected, corrections, extraction, neg_score, debug = score_message_hybrid(
@@ -2746,6 +3151,7 @@ def run_file(filepath, model, embs, texts, cats, verbose=False, mode="cosine",
     mode_labels = {
         "cosine": "cosine", "nli": "NLI-only",
         "hybrid": "hybrid", "llm": "LLM judge",
+        "llm_few_shot": "LLM few-shot",
     }
     mode_label = " ({})".format(mode_labels.get(mode, mode))
     extract_label = " + extraction" if use_extraction else ""
@@ -2769,6 +3175,14 @@ def run_file(filepath, model, embs, texts, cats, verbose=False, mode="cosine",
             display_llm_result(llm_result, corrected, corrections, cosine_results)
             verdict = llm_result.get("verdict", "ERROR")
             all_top_scores.append(1.0 if llm_result.get("match") else 0.0)
+            all_verdicts.append(verdict)
+
+        elif mode == "llm_few_shot":
+            fs_result, corrected, corrections = score_message_llm_few_shot(
+                sent, PROPOSITION, use_extraction=use_extraction)
+            display_llm_result(fs_result, corrected, corrections)
+            verdict = fs_result.get("verdict", "ERROR")
+            all_top_scores.append(1.0 if fs_result.get("match") else 0.0)
             all_verdicts.append(verdict)
 
         elif mode == "hybrid":
@@ -2816,7 +3230,7 @@ def run_file(filepath, model, embs, texts, cats, verbose=False, mode="cosine",
     # Summary
     has_labels = any(l is not None for l in labels)
 
-    if mode == "llm":
+    if mode in ("llm", "llm_few_shot"):
         matches = sum(1 for v in all_verdicts if v == "MATCH")
         warns = sum(1 for v in all_verdicts if v == "WARNING")
         errors = sum(1 for v in all_verdicts if v == "ERROR")
@@ -2849,7 +3263,7 @@ def run_file(filepath, model, embs, texts, cats, verbose=False, mode="cosine",
             if lbl is None:
                 continue
             labeled_count += 1
-            if mode == "llm":
+            if mode in ("llm", "llm_few_shot"):
                 predicted_match = all_verdicts[i] in ("MATCH", "WARNING")
             elif mode == "cosine":
                 predicted_match = all_top_scores[i] >= WARNING_THRESHOLD  # KNN ratio above warning
@@ -2936,8 +3350,8 @@ def main():
     parser.add_argument("--graph", "-g", action="store_true",
         help="Show 2D visualization of anchor distribution + similarity histograms")
     parser.add_argument("--mode", "-m", type=str, default="cosine",
-        choices=["cosine", "nli", "hybrid", "llm"],
-        help="Scoring mode: cosine, nli, hybrid (NLI+KNN blend), llm (LLM judge)")
+        choices=["cosine", "nli", "hybrid", "llm", "llm_few_shot"],
+        help="Scoring mode: cosine, nli, hybrid, llm (zero-shot), llm_few_shot (few-shot grounding)")
     # Backward-compatible aliases
     parser.add_argument("--nli", action="store_true",
         help="Shortcut for --mode nli")
@@ -2945,12 +3359,16 @@ def main():
         help="Shortcut for --mode hybrid")
     parser.add_argument("--llm", action="store_true",
         help="Shortcut for --mode llm")
+    parser.add_argument("--llm-few-shot", action="store_true",
+        help="Shortcut for --mode llm_few_shot")
     parser.add_argument("--no-extract", action="store_true",
         help="Disable proposition-guided extraction for long messages")
     parser.add_argument("--spellcheck", action="store_true",
         help="Enable autocorrect spell checking (disabled by default)")
     parser.add_argument("--compare", "-c", action="store_true",
-        help="Compare all scoring modes side-by-side (cosine, nli, hybrid, +llm)")
+        help="Compare all scoring modes side-by-side (cosine, nli, hybrid, +llm, +llm_few_shot)")
+    parser.add_argument("--experiment", "-e", action="store_true",
+        help="Benchmark mode: measure time and memory per method (use with --compare)")
     parser.add_argument("--auto-calibrate", type=str, default=None, metavar="FILE",
         help="Compute optimal thresholds from labeled file (ROC F1 optimization)")
     args = parser.parse_args()
@@ -2965,6 +3383,8 @@ def main():
         mode = "hybrid"
     elif args.llm:
         mode = "llm"
+    elif args.llm_few_shot:
+        mode = "llm_few_shot"
 
     use_extraction = not args.no_extract
 
@@ -3074,8 +3494,24 @@ def main():
                                 _llm_config.get("base_url"))
         print()
 
-    # Check if LLM is available for compare mode
+    elif mode == "llm_few_shot":
+        _load_llm_config()
+        print("  LLM Few-Shot: {}ON{} ({} / {})".format(
+            GREEN, RESET, _llm_config["provider"], _llm_config["model"]))
+        n_pos = sum(len(v) for v in ANCHORS.values())
+        n_neg = sum(len(v) for v in NEGATIVE_ANCHORS.values()) if NEGATIVE_ANCHORS else 0
+        print("  Few-shot pool: {} positive, {} negative anchors".format(n_pos, n_neg))
+        prov = _llm_config["provider"].lower()
+        if prov in ("ollama", "local", "lmstudio", "vllm"):
+            print("  Base URL:   {}".format(_llm_config.get("base_url", "")))
+        if prov == "ollama":
+            _ollama_ensure_model(_llm_config["model"],
+                                _llm_config.get("base_url"))
+        print()
+
+    # Check if LLM modes are available for compare mode
     include_llm = False
+    include_llm_few_shot = False
     if mode == "compare":
         try:
             _load_llm_config(silent=True)
@@ -3084,8 +3520,11 @@ def main():
                     YELLOW, RESET, SCRIPT_NAME))
             else:
                 include_llm = True
+                include_llm_few_shot = True
                 print("  LLM Judge: {}ON{} ({} / {})".format(
                     GREEN, RESET, _llm_config["provider"], _llm_config["model"]))
+                print("  LLM Few-Shot: {}ON{} (using anchor examples)".format(
+                    GREEN, RESET))
                 if _llm_config["provider"].lower() == "ollama":
                     _ollama_ensure_model(_llm_config["model"],
                                         _llm_config.get("base_url"))
@@ -3099,12 +3538,16 @@ def main():
         if args.file:
             run_compare(args.file, model, all_embs, all_texts, all_cats,
                         use_extraction, neg_embs=neg_embs, neg_texts=neg_texts,
-                        neutral_embs=neutral_embs, include_llm=include_llm)
+                        neutral_embs=neutral_embs, include_llm=include_llm,
+                        include_llm_few_shot=include_llm_few_shot,
+                        experiment=args.experiment)
         else:
             run_compare_interactive(model, all_embs, all_texts, all_cats,
                                     use_extraction, neg_embs=neg_embs,
                                     neg_texts=neg_texts, neutral_embs=neutral_embs,
-                                    include_llm=include_llm)
+                                    include_llm=include_llm,
+                                    include_llm_few_shot=include_llm_few_shot,
+                                    experiment=args.experiment)
     elif args.file:
         run_file(args.file, model, all_embs, all_texts, all_cats,
                  args.verbose, mode, use_extraction,

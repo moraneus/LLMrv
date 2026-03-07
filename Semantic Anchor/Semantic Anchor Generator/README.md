@@ -1,8 +1,39 @@
 # Semantic Anchors Framework
 
-Evaluates natural-language messages against formal propositions using KNN voting across multiple scoring modes: **Cosine KNN**, **NLI KNN**, **Hybrid** (merged cosine + NLI KNN), and **LLM** (direct LLM match check).
+Evaluates natural-language messages against formal propositions using KNN voting across multiple scoring modes: **Cosine KNN**, **NLI KNN**, **Hybrid** (merged cosine + NLI KNN), **LLM** (zero-shot LLM-as-judge), and **LLM Few-Shot** (few-shot grounding with anchor examples).
 
-The generator creates standalone evaluator scripts that run locally with no LLM dependency at inference time (except LLM mode).
+The generator creates standalone evaluator scripts that run locally with no LLM dependency at inference time (except LLM modes).
+
+## Project Structure
+
+```
+Semantic Anchor Generator/
+├── semantic_anchor_generator.py        # Entry point (thin wrapper)
+├── requirements.txt                    # Python dependencies
+├── config.ini                          # Generator configuration
+├── README.md
+└── semantic_anchor/                    # Main package
+    ├── __init__.py
+    ├── config.py                       # DEFAULT_CONFIG, load_config(), parse_categories()
+    ├── embedding.py                    # load_embedding_model(), embed_texts(), cosine_sim_matrix()
+    ├── subtopic.py                     # Subtopic decomposition, coverage audit, gap-fill, parity
+    ├── boundary.py                     # Boundary targeting (logistic regression), hard example mining
+    ├── serialization.py                # Anchor JSON I/O, evaluator template, script generation
+    ├── amo.py                          # Anchor Manifold Optimization (synthetic data + training)
+    ├── main.py                         # CLI entry point (argparse) and pipeline orchestration
+    ├── llm/                            # LLM integration
+    │   ├── __init__.py                 # Re-exports: call_llm, call_llm_raw, _role_context, etc.
+    │   ├── providers.py                # Provider functions (OpenAI, Anthropic, Gemini, Grok, etc.)
+    │   ├── api.py                      # call_llm(), call_llm_raw(), extract_json()
+    │   └── prompts.py                  # System prompts, round1/diversity prompt builders
+    └── generation/                     # Anchor generation pipeline
+        ├── __init__.py
+        ├── selection.py                # find_clusters(), mmr_select(), cluster_constrained_mmr()
+        ├── positive.py                 # generate_diverse_anchors() - positive anchor pipeline
+        ├── negative.py                 # generate_negative_anchors() - contrastive generation
+        ├── hard.py                     # generate_hard_positives(), generate_hard_negatives()
+        └── neutral.py                  # generate_neutral_anchors() - off-topic baselines
+```
 
 ## Setup
 
@@ -10,18 +41,19 @@ The generator creates standalone evaluator scripts that run locally with no LLM 
 python -m venv venv
 source venv/bin/activate
 
-# Core
-pip install sentence-transformers numpy scikit-learn
+# Install all core + LLM provider dependencies
+pip install -r requirements.txt
 
-# LLM provider for generation (one or more):
-pip install openai anthropic google-genai
-
-# Optional
+# Optional (uncomment in requirements.txt or install manually)
 pip install autocorrect     # Spell correction (--spellcheck)
 pip install matplotlib      # Visualization (--graph)
 pip install umap-learn      # Better graph projections (recommended)
 pip install scipy           # Distance fidelity metric for --graph
 ```
+
+**Core dependencies**: `sentence-transformers`, `numpy`, `scikit-learn`, `torch`, `httpx`
+
+**LLM providers** (at least one needed for generation): `openai`, `anthropic`, `google-genai`
 
 ## Generator Configuration (config.ini)
 
@@ -116,15 +148,18 @@ NAME/
 ```bash
 python semantic_anchor_NAME.py                        # Interactive (cosine)
 python semantic_anchor_NAME.py --mode hybrid          # Recommended mode
+python semantic_anchor_NAME.py --mode llm_few_shot    # Few-shot grounding
 python semantic_anchor_NAME.py --compare -f input.txt # All modes side-by-side
+python semantic_anchor_NAME.py --compare --experiment -f input.txt  # + benchmark table
 python semantic_anchor_NAME.py --auto-calibrate labeled.txt  # ROC calibration
 python semantic_anchor_NAME.py --graph                # Distribution visualization
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--mode MODE` | `cosine`, `nli`, `hybrid`, `llm` |
-| `--compare` | All modes side-by-side |
+| `--mode MODE` | `cosine`, `nli`, `hybrid`, `llm`, `llm_few_shot` |
+| `--compare` | All modes side-by-side (includes LLM modes if configured) |
+| `--experiment` | Benchmark mode: measure time and memory per method (use with `--compare`) |
 | `--file PATH` | Batch mode (`###`-separated messages) |
 | `--auto-calibrate FILE` | Optimize thresholds from labeled data |
 | `--graph` | 2D projection + similarity histograms |
@@ -187,13 +222,76 @@ Runs cosine KNN and NLI KNN independently, each selecting their own top K/2 neig
 
 This catches cases where cosine is fooled by vocabulary overlap (NLI corrects it) and cases where NLI misreads intent on a short message (cosine corrects it). Set `hybrid_pool_size = 80–100` for broad propositions.
 
-### LLM
+### LLM (zero-shot)
 
 Sends the proposition and message directly to an LLM API and asks whether the message matches. This is the most flexible mode — the LLM can reason about context, intent, and nuance that embedding models miss — but it requires API credentials, costs money per call, adds latency, and results are non-deterministic. Useful as a validation baseline when developing anchor sets.
 
+### LLM Few-Shot
+
+Inspired by the Temporal Guard grounding engine. Instead of zero-shot classification, this mode sends the LLM a prompt containing labeled few-shot examples selected from the anchor pool:
+
+- **MATCH examples**: Sampled round-robin from positive anchors (diverse across categories)
+- **NO_MATCH examples**: Sampled round-robin from negative anchors (contrastive near-misses)
+
+The LLM sees concrete examples of what should and shouldn't match before classifying the new message. This improves calibration on ambiguous cases where zero-shot LLM mode might be inconsistent. Uses the same `[llm_judge]` config section as the regular LLM mode — no additional configuration needed.
+
+Default: 5 positive + 5 negative examples per prompt. The examples are selected to maximize category diversity (1–2 per category, round-robin).
+
 ### Compare
 
-Runs all available modes side-by-side on the same message with verdicts, scores, and top anchors for each. Useful for understanding where modes agree and disagree.
+Runs all available modes side-by-side on the same message with verdicts, scores, and top anchors for each. When LLM config is available, automatically includes both `llm` and `llm_few_shot` modes. Displays:
+
+- Per-message comparison table with verdicts and scores
+- Summary grid with match/warning/no-match counts per mode
+- Per-message verdict grid with ground-truth accuracy (when using labeled files)
+- All-mode agreement percentage
+
+#### Experiment Mode (`--experiment`)
+
+Add `--experiment` to `--compare` for a benchmark table with full classification metrics and resource measurements.
+
+**With labeled data** (`[MATCH]`/`[CLEAN]` tags in input file):
+
+```
+  Experiment Benchmark
+  ==================================================================================================================================
+  Mode               TP       FP       TN       FN  Precision     Recall       F1      Acc    Avg T    Tot T  Peak Mem
+  ----------------------------------------------------------------------------------------------------------------------------------
+  COSINE              8        2       13        2      80.0%     80.0%    80.0%   84.0%   0.012s   0.300s    1.2 MB
+  NLI                 9        1       14        1      90.0%     90.0%    90.0%   92.0%   0.345s   8.625s    8.4 MB
+  HYBRID              9        1       14        1      90.0%     90.0%    90.0%   92.0%   0.356s   8.900s    8.5 MB
+  LLM                 8        3       12        2      72.7%     80.0%    76.2%   80.0%   1.234s  30.850s    0.3 MB
+  LLM_FEW_SHOT        9        2       13        1      81.8%     90.0%    85.7%   88.0%   1.456s  36.400s    0.4 MB
+  ----------------------------------------------------------------------------------------------------------------------------------
+  Ground truth: 10 MATCH, 15 NO MATCH  (25 labeled of 25 total)
+  Verdict mapping: MATCH/WARNING = positive, NO MATCH = negative
+
+  Memory method: psutil RSS delta (real process memory)
+  Shared models (not in per-mode memory — loaded once, reused by all):
+    Embedding: all-mpnet-base-v2  (used by: cosine, nli, hybrid)
+    NLI:       cross-encoder/nli-deberta-v3-large  (used by: nli, hybrid)
+  Peak Mem = max RSS delta across all messages per mode
+  Time = wall-clock via time.perf_counter()
+```
+
+**Without labels**: shows timing and peak memory only.
+
+**Classification metrics** (MATCH/WARNING = positive prediction, NO MATCH = negative):
+
+| Metric | Formula | Meaning |
+|--------|---------|---------|
+| **TP** | predicted +, actual + | Correctly detected match |
+| **FP** | predicted +, actual − | False alarm (said match, was clean) |
+| **TN** | predicted −, actual − | Correctly passed clean message |
+| **FN** | predicted −, actual + | Missed match (said clean, was match) |
+| **Precision** | TP / (TP + FP) | Of predicted matches, how many correct? |
+| **Recall** | TP / (TP + FN) | Of actual matches, how many caught? |
+| **F1** | 2 × P × R / (P + R) | Harmonic mean of precision and recall |
+| **Acc** | (TP + TN) / total | Overall correctness |
+
+**Memory measurement**: Uses `psutil` for real process RSS (Resident Set Size) delta — captures all memory including C extensions, NumPy arrays, and model inference buffers. Falls back to `tracemalloc` (Python allocations only) if psutil is not installed. Install for accurate memory: `pip install psutil`.
+
+**Shared models**: The embedding model and NLI cross-encoder are loaded once and shared across modes. Their memory is not counted in per-mode Peak Mem — only the incremental memory allocated during each scoring call is measured. LLM modes use only HTTP calls (minimal memory).
 
 ## Generation Pipeline
 
@@ -358,6 +456,8 @@ api_key = YOUR_API_KEY_HERE
 [options]
 spellcheck = false
 ```
+
+The `[llm_judge]` section is shared by both `llm` (zero-shot) and `llm_few_shot` modes — no separate configuration needed.
 
 Note: AMO training parameters (`[training]` section) live in the generator's `config.ini`, not in `config_NAME.ini`. The evaluator config only contains inference-time settings.
 

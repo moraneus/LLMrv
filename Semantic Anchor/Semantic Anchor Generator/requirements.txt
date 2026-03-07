@@ -1,0 +1,17 @@
+# Core dependencies
+sentence-transformers>=2.2.0
+numpy>=1.24.0
+scikit-learn>=1.2.0
+torch>=2.0.0
+httpx>=0.24.0
+
+# LLM providers (install at least one for generation)
+openai>=1.0.0
+anthropic>=0.20.0
+google-genai>=1.0.0
+
+# Optional - evaluator features
+# autocorrect            # Spell correction (--spellcheck)
+# matplotlib>=3.5.0      # Visualization (--graph)
+# umap-learn>=0.5.0      # Better graph projections (recommended with --graph)
+# scipy>=1.10.0          # Distance fidelity metric for --graph
