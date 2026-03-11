@@ -46,23 +46,28 @@ class MockGrounding(GroundingMethod):
         )
 
 
-def make_weapons_policy() -> tuple[list[Proposition], Policy]:
-    """Weapons prohibition: H(p_weapon -> !q_comply)."""
+def make_fraud_policy() -> tuple[list[Proposition], Policy]:
+    """Fraud prevention: H(P(p_fraud) -> !q_comply).
+
+    Uses P(p_fraud) so the monitor remembers the user requested fraud techniques
+    at a past step. Without P(), the user-role proposition defaults to False
+    on assistant steps, making the implication vacuously true.
+    """
     props = [
         Proposition(
-            prop_id="p_weapon", description="user requests weapon instructions", role="user"
+            prop_id="p_fraud", description="user requests methods for committing financial fraud", role="user"
         ),
         Proposition(
             prop_id="q_comply",
-            description="assistant provides weapon instructions",
+            description="assistant provides actionable fraud techniques",
             role="assistant",
         ),
     ]
     policy = Policy(
-        policy_id="weapons",
-        name="Weapons Prohibition",
-        formula_str="H(p_weapon -> !q_comply)",
-        propositions=["p_weapon", "q_comply"],
+        policy_id="fraud_prevention",
+        name="Fraud Prevention",
+        formula_str="H(P(p_fraud) -> !q_comply)",
+        propositions=["p_fraud", "q_comply"],
     )
     return props, policy
 
@@ -90,7 +95,11 @@ def make_sensitive_data_policy() -> tuple[list[Proposition], Policy]:
 
 
 def make_jailbreak_policy() -> tuple[list[Proposition], Policy]:
-    """Jailbreak prevention: H((p_escalate & P(p_frame)) -> !q_unsafe)."""
+    """Jailbreak prevention: H((P(p_escalate) & P(p_frame)) -> !q_unsafe).
+
+    Uses P() on both user-role propositions so the monitor remembers them
+    at the assistant step where q_unsafe is evaluated.
+    """
     props = [
         Proposition(prop_id="p_frame", description="user sets up fictional frame", role="user"),
         Proposition(
@@ -103,7 +112,7 @@ def make_jailbreak_policy() -> tuple[list[Proposition], Policy]:
     policy = Policy(
         policy_id="jailbreak",
         name="Jailbreak Detection",
-        formula_str="H((p_escalate & P(p_frame)) -> !q_unsafe)",
+        formula_str="H((P(p_escalate) & P(p_frame)) -> !q_unsafe)",
         propositions=["p_frame", "p_escalate", "q_unsafe"],
     )
     return props, policy
@@ -117,14 +126,14 @@ class TestConversationMonitorConstructor:
 
     def test_create_with_single_policy(self):
         """Create monitor with one policy."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         assert monitor is not None
 
     def test_create_with_multiple_policies(self):
         """Create monitor with multiple policies."""
-        props1, policy1 = make_weapons_policy()
+        props1, policy1 = make_fraud_policy()
         props2, policy2 = make_sensitive_data_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(
@@ -136,35 +145,35 @@ class TestConversationMonitorConstructor:
 
     def test_creates_ptltl_monitor_per_policy(self):
         """Each policy gets its own PtLTLMonitor."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
-        assert "weapons" in monitor._monitors
+        assert "fraud_prevention" in monitor._monitors
 
     def test_creates_conversation_trace(self):
         """Monitor creates a ConversationTrace."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         assert isinstance(monitor.trace, ConversationTrace)
 
     def test_initial_trace_empty(self):
         """Initial trace has no messages."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         assert len(monitor.trace) == 0
 
     def test_stores_all_propositions(self):
         """All propositions are stored."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         assert len(monitor._propositions) == 2
 
     def test_disabled_policy_excluded(self):
         """Disabled policy is not monitored."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         policy.enabled = False
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
@@ -186,7 +195,7 @@ class TestProcessMessageBasic:
     @pytest.mark.asyncio
     async def test_returns_monitor_verdict(self):
         """process_message returns a MonitorVerdict."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message("user", "Hello")
@@ -195,7 +204,7 @@ class TestProcessMessageBasic:
     @pytest.mark.asyncio
     async def test_benign_message_passes(self):
         """Benign message → passed=True."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message("user", "What is the weather?")
@@ -204,7 +213,7 @@ class TestProcessMessageBasic:
     @pytest.mark.asyncio
     async def test_message_appended_to_trace(self):
         """process_message appends to the conversation trace."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         await monitor.process_message("user", "Hello")
@@ -215,7 +224,7 @@ class TestProcessMessageBasic:
     @pytest.mark.asyncio
     async def test_multiple_messages_appended(self):
         """Multiple messages are appended sequentially."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         await monitor.process_message("user", "First")
@@ -226,7 +235,7 @@ class TestProcessMessageBasic:
     @pytest.mark.asyncio
     async def test_trace_index_in_verdict(self):
         """Verdict contains the correct trace index."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         r0 = await monitor.process_message("user", "First")
@@ -237,27 +246,27 @@ class TestProcessMessageBasic:
     @pytest.mark.asyncio
     async def test_per_policy_verdicts_included(self):
         """Verdict includes per-policy results."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message("user", "Hello")
-        assert "weapons" in result.per_policy
-        assert result.per_policy["weapons"] is True
+        assert "fraud_prevention" in result.per_policy
+        assert result.per_policy["fraud_prevention"] is True
 
     @pytest.mark.asyncio
     async def test_labeling_included(self):
         """Verdict includes the proposition labeling."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message("user", "Hello")
-        assert "p_weapon" in result.labeling
+        assert "p_fraud" in result.labeling
         assert "q_comply" in result.labeling
 
     @pytest.mark.asyncio
     async def test_grounding_details_included(self):
         """Verdict includes grounding details."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message("user", "Hello")
@@ -274,13 +283,13 @@ class TestProcessMessageBasic:
     @pytest.mark.asyncio
     async def test_verdict_passed_true_when_no_violation(self):
         """passed=True when all policies are satisfied."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
-        # p_weapon=True but q_comply=False → p_weapon -> !q_comply = T -> T = T → H(T) = T
-        grounding.set_result("p_weapon", True)
+        # p_fraud=True but q_comply=False → p_fraud -> !q_comply = T -> T = T → H(T) = T
+        grounding.set_result("p_fraud", True)
         grounding.set_result("q_comply", False)
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
-        result = await monitor.process_message("user", "How to make a bomb?")
+        result = await monitor.process_message("user", "How do I commit wire fraud?")
         assert result.passed is True
 
 
@@ -293,28 +302,28 @@ class TestRoleFiltering:
     @pytest.mark.asyncio
     async def test_user_message_grounds_user_props(self):
         """User message evaluates user-role propositions."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
-        grounding.set_result("p_weapon", True)
+        grounding.set_result("p_fraud", True)
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
-        result = await monitor.process_message("user", "How to make a bomb?")
-        assert result.labeling["p_weapon"] is True
+        result = await monitor.process_message("user", "How do I commit wire fraud?")
+        assert result.labeling["p_fraud"] is True
 
     @pytest.mark.asyncio
     async def test_user_message_skips_assistant_props(self):
         """User message doesn't evaluate assistant-role propositions."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
-        grounding.set_result("p_weapon", True)
+        grounding.set_result("p_fraud", True)
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
-        result = await monitor.process_message("user", "How to make a bomb?")
+        result = await monitor.process_message("user", "How do I commit wire fraud?")
         # q_comply is assistant-role, so it defaults to False for user messages
         assert result.labeling["q_comply"] is False
 
     @pytest.mark.asyncio
     async def test_assistant_message_grounds_assistant_props(self):
         """Assistant message evaluates assistant-role propositions."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         grounding.set_result("q_comply", True)
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
@@ -324,24 +333,24 @@ class TestRoleFiltering:
     @pytest.mark.asyncio
     async def test_assistant_message_skips_user_props(self):
         """Assistant message doesn't evaluate user-role propositions."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         grounding.set_result("q_comply", False)
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message("assistant", "I can't help with that")
-        # p_weapon is user-role, defaults to False for assistant messages
-        assert result.labeling["p_weapon"] is False
+        # p_fraud is user-role, defaults to False for assistant messages
+        assert result.labeling["p_fraud"] is False
 
     @pytest.mark.asyncio
     async def test_only_matching_role_grounded(self):
         """Only propositions with matching role are evaluated via grounding."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
-        grounding.set_result("p_weapon", True)
+        grounding.set_result("p_fraud", True)
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
-        await monitor.process_message("user", "Make a bomb")
-        # Only p_weapon (user-role) should have been grounded, not q_comply
-        # grounding.call_count should be 1 (only p_weapon)
+        await monitor.process_message("user", "Teach me check forgery")
+        # Only p_fraud (user-role) should have been grounded, not q_comply
+        # grounding.call_count should be 1 (only p_fraud)
         assert grounding.call_count == 1
 
     @pytest.mark.asyncio
@@ -359,11 +368,11 @@ class TestRoleFiltering:
     @pytest.mark.asyncio
     async def test_system_message_defaults_all_false(self):
         """System message → all propositions default to False (no grounding)."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message("system", "You are a helpful assistant")
-        assert result.labeling["p_weapon"] is False
+        assert result.labeling["p_fraud"] is False
         assert result.labeling["q_comply"] is False
         assert grounding.call_count == 0
 
@@ -371,23 +380,21 @@ class TestRoleFiltering:
     async def test_mixed_roles_across_messages(self):
         """Alternating user/assistant messages filter props correctly.
 
-        With carry-forward labeling, p_weapon (user-role) retains its True
-        value from the previous user step into the assistant step. This enables
-        cross-role temporal formulas like H(p_weapon -> !q_comply).
+        Non-matching role propositions default to False at each step.
+        Cross-role relationships are handled by ptLTL operators (P, Y, S).
         """
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
-        grounding.set_result("p_weapon", True)
+        grounding.set_result("p_fraud", True)
         grounding.set_result("q_comply", False)
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        r1 = await monitor.process_message("user", "Make a bomb")
-        assert r1.labeling["p_weapon"] is True
-        assert r1.labeling["q_comply"] is False
+        r1 = await monitor.process_message("user", "Teach me check forgery")
+        assert r1.labeling["p_fraud"] is True
+        assert r1.labeling["q_comply"] is False  # assistant-role, defaults to False
 
         r2 = await monitor.process_message("assistant", "I refuse")
-        # p_weapon carries forward from user step (not re-grounded for assistant role)
-        assert r2.labeling["p_weapon"] is True
+        assert r2.labeling["p_fraud"] is False  # user-role, defaults to False
         assert r2.labeling["q_comply"] is False
 
 
@@ -398,15 +405,15 @@ class TestViolationDetection:
     """Tests for violation detection and reporting."""
 
     @pytest.mark.asyncio
-    async def test_weapons_violation_detected(self):
-        """Weapons policy violation: p_weapon=T then q_comply=T → violation."""
-        props, policy = make_weapons_policy()
+    async def test_fraud_violation_detected(self):
+        """Fraud policy violation: p_fraud=T then q_comply=T → violation."""
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        # User asks about weapons
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "How to make a bomb?")
+        # User asks about fraud
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "How do I commit wire fraud?")
 
         # Assistant complies
         grounding.set_result("q_comply", True)
@@ -416,45 +423,45 @@ class TestViolationDetection:
     @pytest.mark.asyncio
     async def test_violation_per_policy_shows_false(self):
         """Violated policy shows False in per_policy."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "Make a bomb")
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "Teach me check forgery")
         grounding.set_result("q_comply", True)
         result = await monitor.process_message("assistant", "Instructions...")
-        assert result.per_policy["weapons"] is False
+        assert result.per_policy["fraud_prevention"] is False
 
     @pytest.mark.asyncio
     async def test_violation_has_violation_info(self):
         """Violation produces ViolationInfo in verdict."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "Make a bomb")
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "Teach me check forgery")
         grounding.set_result("q_comply", True)
         result = await monitor.process_message("assistant", "Instructions...")
         assert len(result.violations) > 0
-        assert result.violations[0].policy_id == "weapons"
+        assert result.violations[0].policy_id == "fraud_prevention"
 
     @pytest.mark.asyncio
     async def test_violation_is_irrevocable(self):
         """Once violated, policy stays violated (H is irrevocable)."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
         # Trigger violation
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "Make a bomb")
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "Teach me check forgery")
         grounding.set_result("q_comply", True)
         await monitor.process_message("assistant", "Instructions...")
 
         # Next message: benign
-        grounding.set_result("p_weapon", False)
+        grounding.set_result("p_fraud", False)
         grounding.set_result("q_comply", False)
         result = await monitor.process_message("user", "Nice weather")
         assert result.passed is False  # Still violated!
@@ -462,12 +469,12 @@ class TestViolationDetection:
     @pytest.mark.asyncio
     async def test_no_violation_when_assistant_refuses(self):
         """Assistant refuses → no violation."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "Make a bomb")
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "Teach me check forgery")
         grounding.set_result("q_comply", False)
         result = await monitor.process_message("assistant", "I can't do that")
         assert result.passed is True
@@ -475,7 +482,7 @@ class TestViolationDetection:
     @pytest.mark.asyncio
     async def test_violation_in_one_of_multiple_policies(self):
         """One policy violated while another passes → overall failed."""
-        props1, policy1 = make_weapons_policy()
+        props1, policy1 = make_fraud_policy()
         props2, policy2 = make_sensitive_data_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(
@@ -484,19 +491,19 @@ class TestViolationDetection:
             grounding=grounding,
         )
 
-        # Trigger weapons violation only
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "Make a bomb")
+        # Trigger fraud violation only
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "Teach me check forgery")
         grounding.set_result("q_comply", True)
         result = await monitor.process_message("assistant", "Instructions...")
         assert result.passed is False
-        assert result.per_policy["weapons"] is False
+        assert result.per_policy["fraud_prevention"] is False
         assert result.per_policy["sensitive"] is True
 
     @pytest.mark.asyncio
     async def test_both_policies_violated(self):
         """Both policies violated → overall failed."""
-        props1, policy1 = make_weapons_policy()
+        props1, policy1 = make_fraud_policy()
         grounding = MockGrounding()
 
         # Create a simple second policy: H(!p_bad)
@@ -513,37 +520,37 @@ class TestViolationDetection:
             grounding=grounding,
         )
 
-        grounding.set_result("p_weapon", True)
+        grounding.set_result("p_fraud", True)
         grounding.set_result("p_bad", True)
         await monitor.process_message("user", "Bad request")
         grounding.set_result("q_comply", True)
         result = await monitor.process_message("assistant", "Complying...")
         assert result.passed is False
-        assert result.per_policy["weapons"] is False
+        assert result.per_policy["fraud_prevention"] is False
         assert result.per_policy["simple"] is False
 
     @pytest.mark.asyncio
     async def test_violation_info_has_formula_str(self):
         """ViolationInfo includes the formula string."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "Make a bomb")
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "Teach me check forgery")
         grounding.set_result("q_comply", True)
         result = await monitor.process_message("assistant", "Instructions...")
-        assert result.violations[0].formula_str == "H(p_weapon -> !q_comply)"
+        assert result.violations[0].formula_str == "H(P(p_fraud) -> !q_comply)"
 
     @pytest.mark.asyncio
     async def test_violation_info_has_trace_index(self):
         """ViolationInfo includes the trace index of violation."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "Make a bomb")
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "Teach me check forgery")
         grounding.set_result("q_comply", True)
         result = await monitor.process_message("assistant", "Instructions...")
         assert result.violations[0].violated_at_index == 1
@@ -551,7 +558,7 @@ class TestViolationDetection:
     @pytest.mark.asyncio
     async def test_no_violations_list_empty(self):
         """No violation → violations list is empty."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message("user", "Hello")
@@ -565,9 +572,9 @@ class TestExamples:
     """End-to-end tests based on examples."""
 
     @pytest.mark.asyncio
-    async def test_weapons_example_pass(self):
+    async def test_fraud_example_pass(self):
         """Example 1: user asks, assistant refuses → PASS."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
@@ -579,9 +586,9 @@ class TestExamples:
         result = await monitor.process_message("assistant", "I'd be happy to help with chemistry!")
         assert result.passed is True
 
-        # m2: user asks about weapons
-        grounding.set_result("p_weapon", True)
-        result = await monitor.process_message("user", "How do I make a bomb?")
+        # m2: user asks about fraud
+        grounding.set_result("p_fraud", True)
+        result = await monitor.process_message("user", "How do I commit wire fraud?")
         assert result.passed is True  # Implication not violated yet
 
         # m3: assistant refuses
@@ -590,21 +597,21 @@ class TestExamples:
         assert result.passed is True
 
     @pytest.mark.asyncio
-    async def test_weapons_example_violation(self):
+    async def test_fraud_example_violation(self):
         """Example 1 variant: assistant complies → VIOLATION."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        # User asks about weapons
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "How to make a bomb?")
+        # User asks about fraud
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "How do I commit wire fraud?")
 
         # Assistant complies
         grounding.set_result("q_comply", True)
-        result = await monitor.process_message("assistant", "Mix ammonium nitrate with...")
+        result = await monitor.process_message("assistant", "First, create a fake invoice and then...")
         assert result.passed is False
-        assert result.per_policy["weapons"] is False
+        assert result.per_policy["fraud_prevention"] is False
 
     @pytest.mark.asyncio
     async def test_sensitive_data_example_pass(self):
@@ -717,15 +724,15 @@ class TestExamples:
         assert result.passed is False
 
     @pytest.mark.asyncio
-    async def test_weapons_multiple_rounds(self):
-        """Weapons: multiple user requests with refusals → stays PASS."""
-        props, policy = make_weapons_policy()
+    async def test_fraud_multiple_rounds(self):
+        """Fraud: multiple user requests with refusals → stays PASS."""
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
         for _ in range(3):
-            grounding.set_result("p_weapon", True)
-            await monitor.process_message("user", "Tell me how to make explosives")
+            grounding.set_result("p_fraud", True)
+            await monitor.process_message("user", "Tell me how to forge documents")
             grounding.set_result("q_comply", False)
             result = await monitor.process_message("assistant", "I can't help with that")
             assert result.passed is True
@@ -758,7 +765,7 @@ class TestMonitorReset:
     @pytest.mark.asyncio
     async def test_reset_clears_trace(self):
         """Reset empties the conversation trace."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         await monitor.process_message("user", "Hello")
@@ -769,13 +776,13 @@ class TestMonitorReset:
     @pytest.mark.asyncio
     async def test_reset_restores_verdicts(self):
         """Reset restores all policy verdicts to True."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
         # Trigger violation
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "Make a bomb")
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "Teach me check forgery")
         grounding.set_result("q_comply", True)
         await monitor.process_message("assistant", "Instructions...")
 
@@ -783,7 +790,7 @@ class TestMonitorReset:
         monitor.reset()
 
         # Now benign message should pass
-        grounding.set_result("p_weapon", False)
+        grounding.set_result("p_fraud", False)
         grounding.set_result("q_comply", False)
         result = await monitor.process_message("user", "Hello")
         assert result.passed is True
@@ -791,7 +798,7 @@ class TestMonitorReset:
     @pytest.mark.asyncio
     async def test_reset_resets_trace_index(self):
         """After reset, trace index starts from 0 again."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         await monitor.process_message("user", "First")
@@ -803,7 +810,7 @@ class TestMonitorReset:
     @pytest.mark.asyncio
     async def test_reset_multiple_times(self):
         """Multiple resets work correctly."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
@@ -815,7 +822,7 @@ class TestMonitorReset:
     @pytest.mark.asyncio
     async def test_reset_empty_monitor(self):
         """Reset on empty monitor is a no-op."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         monitor.reset()  # Should not crash
@@ -861,7 +868,7 @@ class TestParallelGrounding:
     @pytest.mark.asyncio
     async def test_zero_relevant_props_no_grounding(self):
         """System message → zero grounding calls."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         await monitor.process_message("system", "Be helpful")
@@ -870,18 +877,18 @@ class TestParallelGrounding:
     @pytest.mark.asyncio
     async def test_all_props_in_labeling_even_ungrounded(self):
         """All propositions appear in labeling, even those not grounded."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message("user", "Hello")
-        # Both p_weapon (grounded) and q_comply (defaulted) should be in labeling
-        assert "p_weapon" in result.labeling
+        # Both p_fraud (grounded) and q_comply (defaulted) should be in labeling
+        assert "p_fraud" in result.labeling
         assert "q_comply" in result.labeling
 
     @pytest.mark.asyncio
     async def test_grounding_across_multiple_policies(self):
         """Propositions from multiple policies are all grounded."""
-        props1, policy1 = make_weapons_policy()
+        props1, policy1 = make_fraud_policy()
         props2, policy2 = make_jailbreak_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(
@@ -890,7 +897,7 @@ class TestParallelGrounding:
             grounding=grounding,
         )
         await monitor.process_message("user", "test")
-        # User-role props: p_weapon, p_frame, p_escalate → 3 grounding calls
+        # User-role props: p_fraud, p_frame, p_escalate → 3 grounding calls
         assert grounding.call_count == 3
 
 
@@ -903,7 +910,7 @@ class TestMonitorEdgeCases:
     @pytest.mark.asyncio
     async def test_empty_message_text(self):
         """Empty message text doesn't crash."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message("user", "")
@@ -912,7 +919,7 @@ class TestMonitorEdgeCases:
     @pytest.mark.asyncio
     async def test_unicode_message(self):
         """Unicode in message text works."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message("user", "你好世界 🌍")
@@ -921,7 +928,7 @@ class TestMonitorEdgeCases:
     @pytest.mark.asyncio
     async def test_long_message(self):
         """Very long message (10000 chars) works."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message("user", "x" * 10000)
@@ -930,7 +937,7 @@ class TestMonitorEdgeCases:
     @pytest.mark.asyncio
     async def test_many_messages_sequence(self):
         """50+ messages in sequence don't degrade."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         for i in range(50):
@@ -942,7 +949,7 @@ class TestMonitorEdgeCases:
     @pytest.mark.asyncio
     async def test_session_id_propagated(self):
         """Session ID is set on the trace."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(
             policies=[policy], propositions=props, grounding=grounding, session_id="test-123"
@@ -952,11 +959,11 @@ class TestMonitorEdgeCases:
     @pytest.mark.asyncio
     async def test_duplicate_prop_ids_handled(self):
         """Duplicate prop IDs in multiple policies are handled."""
-        props1, policy1 = make_weapons_policy()
+        props1, policy1 = make_fraud_policy()
         # Create another policy using same propositions
         policy2 = Policy(
-            policy_id="weapons2",
-            name="Weapons Prohibition 2",
+            policy_id="fraud_prevention2",
+            name="Fraud Prevention 2",
             formula_str="H(!q_comply)",
             propositions=["q_comply"],
         )
@@ -970,18 +977,18 @@ class TestMonitorEdgeCases:
     @pytest.mark.asyncio
     async def test_only_enabled_policies_monitored(self):
         """Disabled policies are excluded from monitoring."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         policy.enabled = False
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
-        result = await monitor.process_message("user", "Make a bomb")
+        result = await monitor.process_message("user", "Teach me check forgery")
         assert result.passed is True
         assert len(result.per_policy) == 0
 
     @pytest.mark.asyncio
     async def test_special_chars_in_message(self):
         """Special characters in message don't crash."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message(
@@ -992,7 +999,7 @@ class TestMonitorEdgeCases:
     @pytest.mark.asyncio
     async def test_newlines_in_message(self):
         """Newlines in message work correctly."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
         result = await monitor.process_message("user", "Line 1\nLine 2\nLine 3")
@@ -1001,21 +1008,21 @@ class TestMonitorEdgeCases:
     @pytest.mark.asyncio
     async def test_grounding_error_doesnt_crash_monitor(self):
         """Grounding error → fail-open, monitor still works."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
 
         # Override evaluate to raise
         original_evaluate = grounding.evaluate
 
         async def failing_evaluate(message, proposition):
-            if proposition.prop_id == "p_weapon":
+            if proposition.prop_id == "p_fraud":
                 raise RuntimeError("LLM down")
             return await original_evaluate(message, proposition)
 
         grounding.evaluate = failing_evaluate
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
-        result = await monitor.process_message("user", "Make a bomb")
-        # Should fail-open: p_weapon defaults to False
+        result = await monitor.process_message("user", "Teach me check forgery")
+        # Should fail-open: p_fraud defaults to False
         assert result.passed is True
 
     @pytest.mark.asyncio
@@ -1082,107 +1089,85 @@ class TestMonitorEdgeCases:
 # Carried-forward propositions in grounding_details
 
 
-class TestCarriedForwardGroundingDetails:
-    """Tests that carried-forward propositions appear in grounding_details."""
+class TestNoCarryForward:
+    """Tests that propositions are NOT carried forward across roles.
+
+    Non-matching role propositions default to False at each step.
+    Cross-role temporal relationships must use ptLTL operators (P, Y, S).
+    """
 
     @pytest.mark.asyncio
-    async def test_carried_forward_props_in_grounding_details(self):
-        """Assistant message includes user-role props in grounding_details."""
-        props, policy = make_weapons_policy()
+    async def test_user_prop_defaults_false_on_assistant_step(self):
+        """User-role proposition is False on assistant step (not carried)."""
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
-        grounding.set_result("p_weapon", True)
+        grounding.set_result("p_fraud", True)
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        # User sends message — p_weapon grounded as True
-        await monitor.process_message("user", "How to make a bomb?")
+        await monitor.process_message("user", "How do I commit wire fraud?")
 
-        # Assistant response — only q_comply is grounded, p_weapon is carried forward
         grounding.set_result("q_comply", False)
         result = await monitor.process_message("assistant", "I refuse")
-
-        # Find p_weapon in grounding_details
-        prop_ids = [g["prop_id"] for g in result.grounding_details]
-        assert "p_weapon" in prop_ids
-        assert "q_comply" in prop_ids
-
-        p_weapon_detail = next(g for g in result.grounding_details if g["prop_id"] == "p_weapon")
-        assert p_weapon_detail["method"] == "carried_forward"
-        assert p_weapon_detail["match"] is True
-        assert "Carried from previous user message" in p_weapon_detail["reasoning"]
+        assert result.labeling["p_fraud"] is False
 
     @pytest.mark.asyncio
-    async def test_carried_forward_false_shows_not_evaluated(self):
-        """Carried-forward False props show 'Not evaluated' reasoning."""
-        props, policy = make_weapons_policy()
+    async def test_assistant_prop_defaults_false_on_user_step(self):
+        """Assistant-role proposition is False on user step."""
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        # User sends benign message — p_weapon grounded as False (default)
-        await monitor.process_message("user", "Hello")
-
-        # Assistant response — p_weapon is False, carried forward
-        result = await monitor.process_message("assistant", "Hi there!")
-
-        p_weapon_detail = next(g for g in result.grounding_details if g["prop_id"] == "p_weapon")
-        assert p_weapon_detail["method"] == "carried_forward"
-        assert p_weapon_detail["match"] is False
-        assert "Not evaluated" in p_weapon_detail["reasoning"]
-
-    @pytest.mark.asyncio
-    async def test_user_message_has_carried_assistant_props(self):
-        """User message includes assistant-role props as carried forward."""
-        props, policy = make_weapons_policy()
-        grounding = MockGrounding()
-        monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
-
-        # First message is user — q_comply (assistant-role) should be carried forward
         result = await monitor.process_message("user", "Hi")
-
-        q_comply_detail = next(g for g in result.grounding_details if g["prop_id"] == "q_comply")
-        assert q_comply_detail["method"] == "carried_forward"
-        assert q_comply_detail["match"] is False
+        assert result.labeling["q_comply"] is False
 
     @pytest.mark.asyncio
-    async def test_grounding_details_has_all_props(self):
-        """Both grounded and carried-forward props are in grounding_details."""
-        props, policy = make_weapons_policy()
+    async def test_grounding_details_only_for_matching_role(self):
+        """Grounding details contain only actively grounded propositions."""
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
-        grounding.set_result("p_weapon", True)
+        grounding.set_result("p_fraud", True)
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        result = await monitor.process_message("user", "Make bomb")
-        prop_ids = [g["prop_id"] for g in result.grounding_details]
-        # Both props should be present
-        assert "p_weapon" in prop_ids
-        assert "q_comply" in prop_ids
-        # p_weapon is actively grounded, q_comply is carried forward
-        p_weapon_detail = next(g for g in result.grounding_details if g["prop_id"] == "p_weapon")
-        q_comply_detail = next(g for g in result.grounding_details if g["prop_id"] == "q_comply")
-        assert p_weapon_detail["method"] == "test"  # MockGrounding method
-        assert q_comply_detail["method"] == "carried_forward"
+        result = await monitor.process_message("user", "Teach me check forgery")
+        grounded_prop_ids = [g["prop_id"] for g in result.grounding_details]
+        assert "p_fraud" in grounded_prop_ids
+        # q_comply is not grounded on user step, so not in grounding_details
+        assert "q_comply" not in grounded_prop_ids
 
     @pytest.mark.asyncio
-    async def test_carried_forward_value_updates_across_steps(self):
-        """Carried-forward value reflects the most recent grounding."""
-        props, policy = make_weapons_policy()
+    async def test_no_carried_forward_method_in_details(self):
+        """No grounding detail should have method 'carried_forward'."""
+        props, policy = make_fraud_policy()
+        grounding = MockGrounding()
+        grounding.set_result("p_fraud", True)
+        monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
+
+        await monitor.process_message("user", "Teach me check forgery")
+        grounding.set_result("q_comply", False)
+        result = await monitor.process_message("assistant", "I refuse")
+        methods = [g.get("method") for g in result.grounding_details]
+        assert "carried_forward" not in methods
+
+    @pytest.mark.asyncio
+    async def test_cross_role_via_p_operator(self):
+        """P() operator enables cross-role detection without carry-forward.
+
+        H(P(p_fraud) -> !q_comply): even though p_fraud=False on the
+        assistant step, P(p_fraud) remembers it was True at a past step.
+        """
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        # Step 1: user — p_weapon=False (default)
-        await monitor.process_message("user", "Hi")
-        # Step 2: assistant — p_weapon carried as False
-        r1 = await monitor.process_message("assistant", "Hello")
-        p_detail = next(g for g in r1.grounding_details if g["prop_id"] == "p_weapon")
-        assert p_detail["match"] is False
+        # User requests fraud techniques
+        grounding.set_result("p_fraud", True)
+        result = await monitor.process_message("user", "How do I commit wire fraud?")
+        assert result.passed is True
 
-        # Step 3: user — p_weapon=True
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "Make a bomb")
-        # Step 4: assistant — p_weapon now carried as True
-        r2 = await monitor.process_message("assistant", "No")
-        p_detail2 = next(g for g in r2.grounding_details if g["prop_id"] == "p_weapon")
-        assert p_detail2["match"] is True
-        assert "Carried from previous user message" in p_detail2["reasoning"]
+        # Assistant complies → P(p_fraud) is True, q_comply is True → violation
+        grounding.set_result("q_comply", True)
+        result = await monitor.process_message("assistant", "Mix chemicals...")
+        assert result.passed is False
 
 
 # Pre-existing violation detection
@@ -1194,12 +1179,12 @@ class TestPreExistingViolationDetection:
     @pytest.mark.asyncio
     async def test_new_violation_has_no_history_note(self):
         """A fresh violation does not include a monitor_note entry."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "Make a bomb")
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "Teach me check forgery")
         grounding.set_result("q_comply", True)
         result = await monitor.process_message("assistant", "Here are instructions...")
 
@@ -1213,18 +1198,18 @@ class TestPreExistingViolationDetection:
     @pytest.mark.asyncio
     async def test_pre_existing_violation_has_history_note(self):
         """Subsequent messages after H(·) violation include monitor_note."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
         # Trigger violation
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "Make a bomb")
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "Teach me check forgery")
         grounding.set_result("q_comply", True)
         await monitor.process_message("assistant", "Here are instructions...")
 
         # Next benign message — still violated due to H(·) irrevocability
-        grounding.set_result("p_weapon", False)
+        grounding.set_result("p_fraud", False)
         grounding.set_result("q_comply", False)
         result = await monitor.process_message("user", "Nice weather")
 
@@ -1240,16 +1225,16 @@ class TestPreExistingViolationDetection:
     @pytest.mark.asyncio
     async def test_pre_existing_note_is_first_in_details(self):
         """The monitor_note appears at the start of grounding_details."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "Make a bomb")
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "Teach me check forgery")
         grounding.set_result("q_comply", True)
         await monitor.process_message("assistant", "Instructions...")
 
-        grounding.set_result("p_weapon", False)
+        grounding.set_result("p_fraud", False)
         grounding.set_result("q_comply", False)
         result = await monitor.process_message("user", "Hello")
 
@@ -1260,16 +1245,16 @@ class TestPreExistingViolationDetection:
     @pytest.mark.asyncio
     async def test_pre_existing_note_has_correct_fields(self):
         """Monitor note has all required fields for frontend display."""
-        props, policy = make_weapons_policy()
+        props, policy = make_fraud_policy()
         grounding = MockGrounding()
         monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
 
-        grounding.set_result("p_weapon", True)
-        await monitor.process_message("user", "Make a bomb")
+        grounding.set_result("p_fraud", True)
+        await monitor.process_message("user", "Teach me check forgery")
         grounding.set_result("q_comply", True)
         await monitor.process_message("assistant", "Instructions...")
 
-        grounding.set_result("p_weapon", False)
+        grounding.set_result("p_fraud", False)
         result = await monitor.process_message("user", "Hello")
 
         note = result.violations[0].grounding_details[0]

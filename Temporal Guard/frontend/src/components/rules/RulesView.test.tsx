@@ -69,7 +69,7 @@ describe("RulesView", () => {
     mockUsePolicies.propositions = {
       status: "success",
       data: [
-        createProposition({ prop_id: "p_weapon" }),
+        createProposition({ prop_id: "p_fraud" }),
         createProposition({
           prop_id: "q_comply",
           role: "assistant",
@@ -78,7 +78,7 @@ describe("RulesView", () => {
       ],
     };
     render(<RulesView />);
-    expect(screen.getByTestId("proposition-card-p_weapon")).toBeInTheDocument();
+    expect(screen.getByTestId("proposition-card-p_fraud")).toBeInTheDocument();
     expect(screen.getByTestId("proposition-card-q_comply")).toBeInTheDocument();
   });
 
@@ -92,7 +92,7 @@ describe("RulesView", () => {
       data: [createPolicy()],
     };
     render(<RulesView />);
-    expect(screen.getByText("Weapons Prohibition")).toBeInTheDocument();
+    expect(screen.getByText("Fraud Prevention")).toBeInTheDocument();
   });
 
   // --- Section headings ---

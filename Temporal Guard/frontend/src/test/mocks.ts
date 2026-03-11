@@ -184,9 +184,9 @@ export function createProposition(
   overrides: Partial<Proposition> = {},
 ): Proposition {
   return {
-    prop_id: "p_weapon",
+    prop_id: "p_fraud",
     role: "user",
-    description: "The user requests weapon instructions",
+    description: "The user requests methods for committing financial fraud",
     created_at: "2025-01-01T00:00:00Z",
     updated_at: "2025-01-01T00:00:00Z",
     ...overrides,
@@ -195,10 +195,10 @@ export function createProposition(
 
 export function createPolicy(overrides: Partial<Policy> = {}): Policy {
   return {
-    policy_id: "pol_weapons",
-    name: "Weapons Prohibition",
-    formula_str: "H(p_weapon -> !q_comply)",
-    propositions: ["p_weapon", "q_comply"],
+    policy_id: "pol_fraud",
+    name: "Fraud Prevention",
+    formula_str: "H(p_fraud -> !q_comply)",
+    propositions: ["p_fraud", "q_comply"],
     enabled: true,
     created_at: "2025-01-01T00:00:00Z",
     updated_at: "2025-01-01T00:00:00Z",
@@ -242,17 +242,17 @@ export function createViolation(
   overrides: Partial<ViolationInfo> = {},
 ): ViolationInfo {
   return {
-    policy_id: "pol_weapons",
-    policy_name: "Weapons Prohibition",
-    formula_str: "H(p_weapon -> !q_comply)",
+    policy_id: "pol_fraud",
+    policy_name: "Fraud Prevention",
+    formula_str: "H(p_fraud -> !q_comply)",
     violated_at_index: 3,
-    labeling: { p_weapon: true, q_comply: true },
+    labeling: { p_fraud: true, q_comply: true },
     grounding_details: [
       {
         prop_id: "q_comply",
         match: true,
         confidence: 0.95,
-        reasoning: "Provides weapon instructions",
+        reasoning: "Provides fraud instructions",
         method: "llm",
       },
     ],
@@ -267,7 +267,7 @@ export function createChatResponse(
     blocked: false,
     response: "Hello! How can I help you today?",
     violation: null,
-    monitor_state: { pol_weapons: true },
+    monitor_state: { pol_fraud: true },
     blocked_response: false,
     ...overrides,
   };

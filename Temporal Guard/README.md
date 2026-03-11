@@ -112,8 +112,8 @@ Create atomic propositions that describe observable behaviors:
 
 | ID | Role | Description |
 |----|------|-------------|
-| `p_weapon` | user | The user requests instructions for constructing a weapon |
-| `q_comply` | assistant | The assistant provides weapon construction instructions |
+| `p_fraud` | user | The user requests methods for committing financial fraud |
+| `q_comply` | assistant | The assistant provides actionable fraud techniques |
 | `p_allergy` | user | The user discloses a food allergy |
 | `q_allergen` | assistant | The assistant suggests food containing the disclosed allergen |
 
@@ -122,10 +122,10 @@ Create atomic propositions that describe observable behaviors:
 Combine propositions into ptLTL formulas:
 
 ```
-H(p_weapon -> !q_comply)
+H(P(p_fraud) -> !q_comply)
 ```
 
-"Historically, whenever the user requests weapon instructions, the assistant must not comply."
+"If the user ever requested fraud techniques, the assistant must never comply. `P()` ensures the monitor remembers the request across turns."
 
 ### 4. Chat
 
@@ -146,29 +146,31 @@ The monitor evaluates every message in real time. If a policy is violated, the m
 
 ### Example Policies
 
-**Weapons Manufacturing Prohibition:**
+**Fraud Prevention:**
 ```
-H(p_weapon -> !q_comply)
+H(P(p_fraud) -> !q_comply)
 ```
-Whenever the user requests weapon instructions, the assistant must refuse. Irrevocable once violated.
+If the user ever requested fraud techniques, the assistant must never comply. `P()` remembers the request across turns so the formula applies even when the assistant responds on a different step. Irrevocable once violated.
 
 **Sensitive Data Protection:**
 ```
 H(Y(p_sensitive) -> q_warn) & H(P(p_sensitive) -> !q_echo)
 ```
-After the user shares sensitive data, the assistant must warn on the next step AND must never echo that data back. Catches delayed echo attacks across many turns.
+After the user shares sensitive data, the assistant must warn on the next step (`Y()` checks the previous step) AND must never echo that data back (`P()` ensures this holds for the entire remaining conversation).
 
 **Multi-Turn Jailbreak Prevention:**
 ```
-H((p_escalate & P(p_frame)) -> !q_unsafe)
+H((P(p_escalate) & P(p_frame)) -> !q_unsafe)
 ```
-If the user escalates and had previously framed a harmful context, the assistant must not comply. Detects slow-burn jailbreaks where framing and escalation happen many turns apart.
+If the user has ever escalated and previously framed a harmful context, the assistant must not comply. `P()` on both user-role propositions lets the formula detect patterns where framing and escalation happen many turns apart.
 
 **Allergen Safety:**
 ```
 H(Y(p_allergy) -> q_warn) & H(P(p_allergy) -> !q_allergen)
 ```
-After a user discloses a food allergy, the assistant must warn on the next step and must never suggest food containing that allergen. The `P()` operator ensures this holds for the entire remaining conversation.
+After a user discloses a food allergy, the assistant must warn on the next step and must never suggest food containing that allergen.
+
+**Important:** Cross-role formulas must use temporal operators (`P`, `Y`, `S`) to reference propositions from a different role. Each step only grounds propositions matching the message's role — other propositions default to `False`. For example, use `H(P(p_user_prop) -> !q_assistant_prop)` instead of `H(p_user_prop -> !q_assistant_prop)`.
 
 ## Project Structure
 
@@ -196,10 +198,10 @@ temporalguard/
 ## Testing
 
 ```bash
-# Backend tests (757 tests)
+# All backend tests
 pytest tests/ --ignore=tests/e2e
 
-# Frontend tests (283 tests)
+# Frontend tests
 cd frontend && npx vitest run
 
 # E2E tests (requires running app)
@@ -209,6 +211,34 @@ cd tests/e2e && python -m pytest
 ruff check backend/ tests/
 cd frontend && npx tsc --noEmit
 ```
+
+### Runtime Verification Trace Tests
+
+The ptLTL engine is validated by **158 trace-level tests** across two test files that verify the monitor against handcrafted conversation traces — no grounding involved, purely logical correctness:
+
+```bash
+# Run all RV trace tests (158 tests)
+pytest tests/test_rv_traces.py tests/test_rv_traces_extended.py -v
+
+# Run only the extended suite (110 tests, 10–100 events per trace)
+pytest tests/test_rv_traces_extended.py -v
+```
+
+**`test_rv_traces.py`** — 48 tests based on paper examples (weapons prohibition, sensitive data, jailbreak detection) with 10–20 event traces.
+
+**`test_rv_traces_extended.py`** — 110 tests organized into 7 categories:
+
+| Category | Tests | Coverage |
+|----------|-------|----------|
+| `TestHistorically` | 1–20 | `H(phi)` irrevocability, violation at step 0 / middle / last, long 50–100 event traces, alternating patterns, nested H, boolean literals |
+| `TestPreviously` | 21–35 | `P(phi)` latch behavior, latch permanence over 100 steps, `H(P(p) -> q)` conditional policies, disjunction/conjunction variants |
+| `TestYesterday` | 36–50 | `Y(phi)` false at step 0, nested `Y(Y(p))` and `Y(Y(Y(p)))`, `H(Y(p) -> q)` immediate-response patterns, oscillating traces |
+| `TestSince` | 51–65 | `phi S psi` trigger/maintain/break semantics, retriggering, never-triggered traces, 50-step since chains, negation in maintained formula |
+| `TestCombined` | 66–85 | Multi-policy conjunctions, jailbreak pattern, sensitive data pattern, nested operators `P(Y(p))`, three-policy formulas, realistic 30-step scenarios |
+| `TestEdgeCases` | 86–100 | 100-event all-false / all-true / alternating traces, empty labelings, 5-proposition formulas, deeply nested `H(P(Y(p -> !q)))`, monitor reset, state snapshot verification |
+| `TestLongTraces` | 101–110 | 100-event stress traces with deterministic patterns, violation at event 99, `Y` chains 4 levels deep over 100 steps, multi-policy 100-step scenarios |
+
+Each test specifies a ptLTL formula, a trace of labeled events, and the expected verdict at **every step** — verified against the formal ptLTL recurrences.
 
 ## Troubleshooting
 

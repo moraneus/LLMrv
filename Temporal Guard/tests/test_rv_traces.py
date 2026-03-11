@@ -40,56 +40,56 @@ def run_trace(
     return monitor
 
 
-# Test 1–2: Weapons Prohibition
+# Test 1–2: Fraud Prevention
 
 
-class TestWeapons:
-    """Weapons prohibition: H(p_weapon -> !q_comply)."""
+class TestFraud:
+    """Fraud prevention: H(p_fraud -> !q_comply)."""
 
     def test_persistent_attacker_all_refused(self):
-        """Test 1: 5 weapon requests across 16 messages, all refused → ⊤."""
-        F = "H(p_weapon -> !q_comply)"
+        """Test 1: 5 fraud requests across 16 messages, all refused → ⊤."""
+        F = "H(p_fraud -> !q_comply)"
         T = [
-            {"p_weapon": False, "q_comply": False},  # 0 U benign
-            {"p_weapon": False, "q_comply": False},  # 1 A
-            {"p_weapon": True, "q_comply": False},  # 2 U weapon req
-            {"p_weapon": False, "q_comply": False},  # 3 A refuses
-            {"p_weapon": False, "q_comply": False},  # 4 U benign
-            {"p_weapon": False, "q_comply": False},  # 5 A
-            {"p_weapon": True, "q_comply": False},  # 6 U weapon req
-            {"p_weapon": False, "q_comply": False},  # 7 A refuses
-            {"p_weapon": False, "q_comply": False},  # 8 U benign
-            {"p_weapon": False, "q_comply": False},  # 9 A
-            {"p_weapon": True, "q_comply": False},  # 10 U weapon req
-            {"p_weapon": False, "q_comply": False},  # 11 A refuses
-            {"p_weapon": True, "q_comply": False},  # 12 U weapon req
-            {"p_weapon": False, "q_comply": False},  # 13 A refuses
-            {"p_weapon": True, "q_comply": False},  # 14 U weapon req
-            {"p_weapon": False, "q_comply": False},  # 15 A refuses
+            {"p_fraud": False, "q_comply": False},  # 0 U benign
+            {"p_fraud": False, "q_comply": False},  # 1 A
+            {"p_fraud": True, "q_comply": False},  # 2 U fraud req
+            {"p_fraud": False, "q_comply": False},  # 3 A refuses
+            {"p_fraud": False, "q_comply": False},  # 4 U benign
+            {"p_fraud": False, "q_comply": False},  # 5 A
+            {"p_fraud": True, "q_comply": False},  # 6 U fraud req
+            {"p_fraud": False, "q_comply": False},  # 7 A refuses
+            {"p_fraud": False, "q_comply": False},  # 8 U benign
+            {"p_fraud": False, "q_comply": False},  # 9 A
+            {"p_fraud": True, "q_comply": False},  # 10 U fraud req
+            {"p_fraud": False, "q_comply": False},  # 11 A refuses
+            {"p_fraud": True, "q_comply": False},  # 12 U fraud req
+            {"p_fraud": False, "q_comply": False},  # 13 A refuses
+            {"p_fraud": True, "q_comply": False},  # 14 U fraud req
+            {"p_fraud": False, "q_comply": False},  # 15 A refuses
         ]
         E = [True] * 16
         run_trace(F, T, E)
 
     def test_compliance_at_attempt_3(self):
-        """Test 2: Assistant complies at 3rd weapon request (step 11) → ⊥ irrevocable."""
-        F = "H(p_weapon -> !q_comply)"
+        """Test 2: Assistant complies at 3rd fraud request (step 11) → ⊥ irrevocable."""
+        F = "H(p_fraud -> !q_comply)"
         T = [
-            {"p_weapon": False, "q_comply": False},  # 0
-            {"p_weapon": False, "q_comply": False},  # 1
-            {"p_weapon": True, "q_comply": False},  # 2
-            {"p_weapon": False, "q_comply": False},  # 3
-            {"p_weapon": False, "q_comply": False},  # 4
-            {"p_weapon": False, "q_comply": False},  # 5
-            {"p_weapon": True, "q_comply": False},  # 6
-            {"p_weapon": False, "q_comply": False},  # 7
-            {"p_weapon": False, "q_comply": False},  # 8
-            {"p_weapon": False, "q_comply": False},  # 9
-            {"p_weapon": True, "q_comply": True},  # 10 weapon req + COMPLY → violation
-            {"p_weapon": False, "q_comply": False},  # 11
-            {"p_weapon": False, "q_comply": False},  # 12
-            {"p_weapon": False, "q_comply": False},  # 13
-            {"p_weapon": False, "q_comply": False},  # 14
-            {"p_weapon": False, "q_comply": False},  # 15
+            {"p_fraud": False, "q_comply": False},  # 0
+            {"p_fraud": False, "q_comply": False},  # 1
+            {"p_fraud": True, "q_comply": False},  # 2
+            {"p_fraud": False, "q_comply": False},  # 3
+            {"p_fraud": False, "q_comply": False},  # 4
+            {"p_fraud": False, "q_comply": False},  # 5
+            {"p_fraud": True, "q_comply": False},  # 6
+            {"p_fraud": False, "q_comply": False},  # 7
+            {"p_fraud": False, "q_comply": False},  # 8
+            {"p_fraud": False, "q_comply": False},  # 9
+            {"p_fraud": True, "q_comply": True},  # 10 fraud req + COMPLY → violation
+            {"p_fraud": False, "q_comply": False},  # 11
+            {"p_fraud": False, "q_comply": False},  # 12
+            {"p_fraud": False, "q_comply": False},  # 13
+            {"p_fraud": False, "q_comply": False},  # 14
+            {"p_fraud": False, "q_comply": False},  # 15
         ]
         E = [True] * 10 + [False] * 6
         run_trace(F, T, E)
@@ -696,12 +696,12 @@ class TestMultiPolicy:
     """Multiple policies evaluated independently."""
 
     def test_both_policies_pass(self):
-        """Test 25: Weapons + sensitive data, both satisfied → ⊤."""
-        fa = "H(p_weapon -> !q_comply)"
+        """Test 25: Fraud prevention + sensitive data, both satisfied → ⊤."""
+        fa = "H(p_fraud -> !q_comply)"
         fb = "H(Y(p_sensitive) -> q_warn) & H(P(p_sensitive) -> !q_echo)"
 
         props = {
-            "p_weapon": False,
+            "p_fraud": False,
             "q_comply": False,
             "p_sensitive": False,
             "q_warn": False,
@@ -713,11 +713,11 @@ class TestMultiPolicy:
             {**props},  # 1
             {**props, "p_sensitive": True},  # 2 SSN
             {**props, "q_warn": True},  # 3 warns
-            {**props, "p_weapon": True},  # 4 weapon req
+            {**props, "p_fraud": True},  # 4 fraud req
             {**props},  # 5 refuses
             {**props},  # 6
             {**props},  # 7
-            {**props, "p_weapon": True},  # 8 weapon req
+            {**props, "p_fraud": True},  # 8 fraud req
             {**props},  # 9 refuses
             {**props},  # 10
             {**props},  # 11 no echo
@@ -735,12 +735,12 @@ class TestMultiPolicy:
             assert overall is True, f"Step {i}: VA={va}, VB={vb}"
 
     def test_one_policy_fails(self):
-        """Test 26: Weapons ⊤ but sensitive echo ⊥ → overall ⊥."""
-        fa = "H(p_weapon -> !q_comply)"
+        """Test 26: Fraud prevention ⊤ but sensitive echo ⊥ → overall ⊥."""
+        fa = "H(p_fraud -> !q_comply)"
         fb = "H(P(p_sensitive) -> !q_echo)"
 
         props = {
-            "p_weapon": False,
+            "p_fraud": False,
             "q_comply": False,
             "p_sensitive": False,
             "q_echo": False,
@@ -751,14 +751,14 @@ class TestMultiPolicy:
             {**props},  # 1
             {**props, "p_sensitive": True},  # 2 SSN
             {**props},  # 3
-            {**props, "p_weapon": True},  # 4
-            {**props},  # 5 weapon refused
+            {**props, "p_fraud": True},  # 4
+            {**props},  # 5 fraud refused
             {**props},  # 6
             {**props},  # 7
             {**props},  # 8
             {**props, "q_echo": True},  # 9 ECHO!
-            {**props, "p_weapon": True},  # 10
-            {**props},  # 11 weapon refused
+            {**props, "p_fraud": True},  # 10
+            {**props},  # 11 fraud refused
         ]
 
         ast_a = parse(fa)
@@ -961,46 +961,46 @@ class TestSelfHarm:
 
 
 class TestLanguageSwitch:
-    """Language switching: H(p_weapon -> !q_comply) across languages."""
+    """Language switching: H(p_fraud -> !q_comply) across languages."""
 
     def test_all_languages_refused(self):
         """Test 36: 3 languages, all caught → ⊤."""
-        F = "H(p_weapon -> !q_comply)"
+        F = "H(p_fraud -> !q_comply)"
         T = [
-            {"p_weapon": False, "q_comply": False},  # 0
-            {"p_weapon": False, "q_comply": False},  # 1
-            {"p_weapon": True, "q_comply": False},  # 2 English
-            {"p_weapon": False, "q_comply": False},  # 3 refuses
-            {"p_weapon": False, "q_comply": False},  # 4
-            {"p_weapon": False, "q_comply": False},  # 5
-            {"p_weapon": True, "q_comply": False},  # 6 Spanish
-            {"p_weapon": False, "q_comply": False},  # 7 refuses
-            {"p_weapon": False, "q_comply": False},  # 8
-            {"p_weapon": False, "q_comply": False},  # 9
-            {"p_weapon": True, "q_comply": False},  # 10 French
-            {"p_weapon": False, "q_comply": False},  # 11 refuses
-            {"p_weapon": False, "q_comply": False},  # 12
-            {"p_weapon": False, "q_comply": False},  # 13
+            {"p_fraud": False, "q_comply": False},  # 0
+            {"p_fraud": False, "q_comply": False},  # 1
+            {"p_fraud": True, "q_comply": False},  # 2 English
+            {"p_fraud": False, "q_comply": False},  # 3 refuses
+            {"p_fraud": False, "q_comply": False},  # 4
+            {"p_fraud": False, "q_comply": False},  # 5
+            {"p_fraud": True, "q_comply": False},  # 6 Spanish
+            {"p_fraud": False, "q_comply": False},  # 7 refuses
+            {"p_fraud": False, "q_comply": False},  # 8
+            {"p_fraud": False, "q_comply": False},  # 9
+            {"p_fraud": True, "q_comply": False},  # 10 French
+            {"p_fraud": False, "q_comply": False},  # 11 refuses
+            {"p_fraud": False, "q_comply": False},  # 12
+            {"p_fraud": False, "q_comply": False},  # 13
         ]
         E = [True] * 14
         run_trace(F, T, E)
 
     def test_comply_in_second_language(self):
         """Test 37: Complied in Spanish → ⊥."""
-        F = "H(p_weapon -> !q_comply)"
+        F = "H(p_fraud -> !q_comply)"
         T = [
-            {"p_weapon": False, "q_comply": False},  # 0
-            {"p_weapon": False, "q_comply": False},  # 1
-            {"p_weapon": True, "q_comply": False},  # 2 English
-            {"p_weapon": False, "q_comply": False},  # 3 refuses
-            {"p_weapon": False, "q_comply": False},  # 4
-            {"p_weapon": False, "q_comply": False},  # 5
-            {"p_weapon": True, "q_comply": True},  # 6 Spanish COMPLY
-            {"p_weapon": False, "q_comply": False},  # 7
-            {"p_weapon": False, "q_comply": False},  # 8
-            {"p_weapon": False, "q_comply": False},  # 9
-            {"p_weapon": False, "q_comply": False},  # 10
-            {"p_weapon": False, "q_comply": False},  # 11
+            {"p_fraud": False, "q_comply": False},  # 0
+            {"p_fraud": False, "q_comply": False},  # 1
+            {"p_fraud": True, "q_comply": False},  # 2 English
+            {"p_fraud": False, "q_comply": False},  # 3 refuses
+            {"p_fraud": False, "q_comply": False},  # 4
+            {"p_fraud": False, "q_comply": False},  # 5
+            {"p_fraud": True, "q_comply": True},  # 6 Spanish COMPLY
+            {"p_fraud": False, "q_comply": False},  # 7
+            {"p_fraud": False, "q_comply": False},  # 8
+            {"p_fraud": False, "q_comply": False},  # 9
+            {"p_fraud": False, "q_comply": False},  # 10
+            {"p_fraud": False, "q_comply": False},  # 11
         ]
         E = [True] * 6 + [False] * 6
         run_trace(F, T, E)
@@ -1092,8 +1092,8 @@ class TestEdgeCases:
 
     def test_benign_20_step(self):
         """Test 41: 20 benign steps, all vacuously true → ⊤."""
-        F = "H(p_weapon -> !q_comply)"
-        T = [{"p_weapon": False, "q_comply": False}] * 20
+        F = "H(p_fraud -> !q_comply)"
+        T = [{"p_fraud": False, "q_comply": False}] * 20
         E = [True] * 20
         run_trace(F, T, E)
 

@@ -40,13 +40,7 @@ export default function ViolationAlert({
                   ) : (
                     <p key={i} className="text-xs text-red-400">
                       <span className="font-mono">{g.prop_id}</span>:{" "}
-                      {g.match ? "matched" : "no match"}
-                      {g.method === "carried_forward" && (
-                        <span className="italic text-red-300">
-                          {" "}
-                          (carried forward)
-                        </span>
-                      )}{" "}
+                      {g.match ? "matched" : "no match"}{" "}
                       — {g.reasoning}
                     </p>
                   ),

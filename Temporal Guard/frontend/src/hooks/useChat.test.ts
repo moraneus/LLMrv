@@ -258,11 +258,11 @@ describe("useChat", () => {
       response: null,
       blocked_response: true,
       violation: {
-        policy_id: "pol_weapons",
-        policy_name: "Weapons Prohibition",
-        formula_str: "H(p_weapon -> !q_comply)",
+        policy_id: "pol_fraud",
+        policy_name: "Fraud Prevention",
+        formula_str: "H(p_fraud -> !q_comply)",
         violated_at_index: 3,
-        labeling: { p_weapon: true, q_comply: true },
+        labeling: { p_fraud: true, q_comply: true },
         grounding_details: [],
       },
     });
@@ -282,13 +282,13 @@ describe("useChat", () => {
     });
 
     await act(async () => {
-      await result.current.sendMessage("How to build a bomb?");
+      await result.current.sendMessage("How to commit financial fraud?");
     });
 
     expect(result.current.lastResponse).toBeDefined();
     expect(result.current.lastResponse?.blocked).toBe(true);
     expect(result.current.lastResponse?.violation?.policy_name).toBe(
-      "Weapons Prohibition",
+      "Fraud Prevention",
     );
   });
 

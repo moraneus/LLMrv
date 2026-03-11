@@ -35,14 +35,14 @@ describe("PropositionEditor", () => {
     const existing = createProposition({
       prop_id: "q_comply",
       role: "assistant",
-      description: "The assistant provides weapon instructions",
+      description: "The assistant provides fraud instructions",
     });
     renderEditor({ initial: existing });
 
     expect(screen.getByTestId("prop-id-input")).toHaveValue("q_comply");
     expect(screen.getByTestId("prop-id-input")).toBeDisabled();
     expect(screen.getByTestId("prop-description-input")).toHaveValue(
-      "The assistant provides weapon instructions",
+      "The assistant provides fraud instructions",
     );
     expect(screen.getByTestId("prop-role-assistant")).toBeChecked();
     expect(screen.getByTestId("prop-role-user")).not.toBeChecked();

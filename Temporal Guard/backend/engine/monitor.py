@@ -24,8 +24,14 @@ class ConversationMonitor:
     1. Append to trace
     2. Filter propositions by role constraint
     3. Evaluate matching propositions via grounding engine
-    4. Feed boolean labeling to ptLTL monitors
+    4. Feed boolean labeling to ptLTL monitors (non-matching roles default to False)
     5. Return aggregated verdict
+
+    Propositions are only grounded when the message role matches the proposition
+    role. Non-matching propositions default to False at each step. Cross-role
+    temporal relationships must be expressed using ptLTL operators (P, Y, S) —
+    e.g., use H(P(p_fraud) -> !q_comply) instead of H(p_fraud -> !q_comply)
+    so the monitor remembers that the user requested fraud techniques at a past step.
     """
 
     def __init__(
@@ -40,10 +46,6 @@ class ConversationMonitor:
         self._policies: dict[str, Policy] = {}
         self._monitors: dict[str, PtLTLMonitor] = {}
         self.trace = ConversationTrace(session_id=session_id or str(uuid.uuid4()))
-        # Carry forward last grounded value for each proposition across steps.
-        # This allows cross-role temporal properties (e.g., p_weapon=T at user step
-        # carries into assistant step for H(p_weapon -> !q_comply) to detect violations).
-        self._last_labeling: dict[str, bool] = {p.prop_id: False for p in propositions}
 
         for policy in policies:
             if not policy.enabled:
@@ -79,32 +81,13 @@ class ConversationMonitor:
                 labeling[prop.prop_id] = result.match
                 grounding_details.append(result.to_dict())
 
-        # 4. Non-matching roles retain their last grounded value.
-        # This enables cross-role temporal properties like H(p_weapon -> !q_comply)
-        # where p_weapon (user-role) was True at a previous step.
-        # Include carried-forward propositions in grounding_details so the user
-        # can see the full labeling picture (not just role-matched ones).
+        # 4. Non-matching role propositions default to False.
+        # Cross-role temporal relationships are expressed via ptLTL operators
+        # (P, Y, S) in the formula itself — not by artificially carrying
+        # proposition values across steps.
         for prop_id in self._propositions:
             if prop_id not in labeling:
-                carried_value = self._last_labeling.get(prop_id, False)
-                labeling[prop_id] = carried_value
-                prop = self._propositions[prop_id]
-                grounding_details.append(
-                    {
-                        "match": carried_value,
-                        "confidence": 1.0,
-                        "reasoning": (
-                            f"Carried from previous {prop.role} message"
-                            if carried_value
-                            else f"Not evaluated ({prop.role}-role proposition, current message is {role})"
-                        ),
-                        "method": "carried_forward",
-                        "prop_id": prop_id,
-                    }
-                )
-
-        # Update last labeling for carry-forward
-        self._last_labeling.update(labeling)
+                labeling[prop_id] = False
 
         # 5. Step each ptLTL monitor
         per_policy: dict[str, bool] = {}
@@ -174,6 +157,5 @@ class ConversationMonitor:
     def reset(self) -> None:
         """Reset all monitors and trace (new conversation)."""
         self.trace = ConversationTrace(session_id=self.trace.session_id)
-        self._last_labeling = {p: False for p in self._propositions}
         for monitor in self._monitors.values():
             monitor.reset()

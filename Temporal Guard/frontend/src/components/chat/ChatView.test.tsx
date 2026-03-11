@@ -159,7 +159,7 @@ describe("ChatView", () => {
           id: 1,
           role: "user",
           content: "Hi",
-          monitor_state: { pol_weapons: true },
+          monitor_state: { pol_fraud: true },
         }),
       ],
     };

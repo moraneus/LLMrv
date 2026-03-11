@@ -21,11 +21,11 @@ describe("Test infrastructure", () => {
 
   it("creates mock proposition", () => {
     const prop = createProposition();
-    expect(prop.prop_id).toBe("p_weapon");
+    expect(prop.prop_id).toBe("p_fraud");
   });
 
   it("creates mock policy", () => {
     const policy = createPolicy();
-    expect(policy.formula_str).toBe("H(p_weapon -> !q_comply)");
+    expect(policy.formula_str).toBe("H(p_fraud -> !q_comply)");
   });
 });

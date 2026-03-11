@@ -157,11 +157,11 @@ class TestPropositionsCRUD:
     @pytest.mark.asyncio
     async def test_create_proposition(self, db):
         """Create a proposition and verify it exists."""
-        await db.create_proposition("p_weapon", "User requests weapon info", "user")
-        prop = await db.get_proposition("p_weapon")
+        await db.create_proposition("p_fraud", "User requests fraud techniques", "user")
+        prop = await db.get_proposition("p_fraud")
         assert prop is not None
-        assert prop["prop_id"] == "p_weapon"
-        assert prop["description"] == "User requests weapon info"
+        assert prop["prop_id"] == "p_fraud"
+        assert prop["description"] == "User requests fraud techniques"
         assert prop["role"] == "user"
 
     @pytest.mark.asyncio
@@ -255,8 +255,8 @@ class TestPropositionsCRUD:
     @pytest.mark.asyncio
     async def test_proposition_special_chars_in_id(self, db):
         """Proposition IDs with underscores and numbers work."""
-        await db.create_proposition("p_weapon_123", "desc", "user")
-        prop = await db.get_proposition("p_weapon_123")
+        await db.create_proposition("p_fraud_123", "desc", "user")
+        prop = await db.get_proposition("p_fraud_123")
         assert prop is not None
 
     @pytest.mark.asyncio
@@ -275,11 +275,11 @@ class TestPoliciesCRUD:
     @pytest.mark.asyncio
     async def test_create_policy(self, db):
         """Create a policy and verify it exists."""
-        await db.create_policy("pol1", "Weapons", "H(p -> !q)", True)
+        await db.create_policy("pol1", "Fraud Prevention", "H(p -> !q)", True)
         policy = await db.get_policy("pol1")
         assert policy is not None
         assert policy["policy_id"] == "pol1"
-        assert policy["name"] == "Weapons"
+        assert policy["name"] == "Fraud Prevention"
         assert policy["formula_str"] == "H(p -> !q)"
         assert policy["enabled"] == 1
 
@@ -565,7 +565,7 @@ class TestMessages:
     async def test_message_violation_info(self, db):
         """Violation info is stored as JSON."""
         await db.create_session("sess1", "Chat")
-        violation = {"policy_id": "pol1", "reason": "weapons"}
+        violation = {"policy_id": "pol1", "reason": "fraud"}
         await db.add_message(
             "sess1",
             0,

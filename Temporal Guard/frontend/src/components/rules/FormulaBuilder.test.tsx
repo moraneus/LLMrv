@@ -12,7 +12,7 @@ function createValidResult(
   return {
     valid: true,
     error: null,
-    propositions: ["p_weapon", "q_comply"],
+    propositions: ["p_fraud", "q_comply"],
     ...overrides,
   };
 }
@@ -38,7 +38,7 @@ function renderBuilder(
 ) {
   const props = {
     propositions: overrides.propositions ?? [
-      createProposition({ prop_id: "p_weapon", role: "user" }),
+      createProposition({ prop_id: "p_fraud", role: "user" }),
       createProposition({
         prop_id: "q_comply",
         role: "assistant",
@@ -66,7 +66,7 @@ describe("FormulaBuilder", () => {
   it("renders proposition chips for all provided propositions", () => {
     renderBuilder();
     expect(screen.getByTestId("proposition-chips")).toBeInTheDocument();
-    expect(screen.getByTestId("chip-p_weapon")).toHaveTextContent("p_weapon");
+    expect(screen.getByTestId("chip-p_fraud")).toHaveTextContent("p_fraud");
     expect(screen.getByTestId("chip-q_comply")).toHaveTextContent("q_comply");
   });
 
@@ -106,9 +106,9 @@ describe("FormulaBuilder", () => {
     const user = userEvent.setup();
     renderBuilder();
 
-    await user.click(screen.getByTestId("chip-p_weapon"));
+    await user.click(screen.getByTestId("chip-p_fraud"));
 
-    expect(screen.getByTestId("formula-input")).toHaveValue("p_weapon");
+    expect(screen.getByTestId("formula-input")).toHaveValue("p_fraud");
   });
 
   it("clicking an operator button appends operator to formula input", async () => {
@@ -127,7 +127,7 @@ describe("FormulaBuilder", () => {
 
     await user.type(
       screen.getByTestId("formula-input"),
-      "H(p_weapon -> !q_comply)",
+      "H(p_fraud -> !q_comply)",
     );
 
     await waitFor(() => {
@@ -141,7 +141,7 @@ describe("FormulaBuilder", () => {
     const onValidate = vi.fn().mockResolvedValue(createInvalidResult());
     renderBuilder({ onValidate });
 
-    await user.type(screen.getByTestId("formula-input"), "H(p_weapon ->");
+    await user.type(screen.getByTestId("formula-input"), "H(p_fraud ->");
 
     await waitFor(() => {
       expect(screen.getByTestId("formula-validation")).toBeInTheDocument();
@@ -169,11 +169,11 @@ describe("FormulaBuilder", () => {
 
     await user.type(
       screen.getByTestId("policy-name-input"),
-      "Weapons Prohibition",
+      "Fraud Prevention",
     );
     await user.type(
       screen.getByTestId("formula-input"),
-      "H(p_weapon -> !q_comply)",
+      "H(p_fraud -> !q_comply)",
     );
 
     // Wait for debounced validation to complete and enable save
@@ -185,8 +185,8 @@ describe("FormulaBuilder", () => {
 
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave).toHaveBeenCalledWith({
-      name: "Weapons Prohibition",
-      formula_str: "H(p_weapon -> !q_comply)",
+      name: "Fraud Prevention",
+      formula_str: "H(p_fraud -> !q_comply)",
     });
   });
 });

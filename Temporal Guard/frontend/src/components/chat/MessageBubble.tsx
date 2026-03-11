@@ -150,28 +150,15 @@ export default function MessageBubble({
                         >
                           {g.match ? "Match" : "No match"}
                         </span>
-                        {g.method !== "carried_forward" && (
-                          <span
-                            className={
-                              isUser && !blocked
-                                ? "text-blue-300"
-                                : "text-slate-400"
-                            }
-                          >
-                            ({(g.confidence * 100).toFixed(0)}%)
-                          </span>
-                        )}
-                        {g.method === "carried_forward" && (
-                          <span
-                            className={
-                              isUser && !blocked
-                                ? "text-blue-300"
-                                : "text-slate-400"
-                            }
-                          >
-                            (carried)
-                          </span>
-                        )}
+                        <span
+                          className={
+                            isUser && !blocked
+                              ? "text-blue-300"
+                              : "text-slate-400"
+                          }
+                        >
+                          ({(g.confidence * 100).toFixed(0)}%)
+                        </span>
                       </div>
                       <p
                         className={

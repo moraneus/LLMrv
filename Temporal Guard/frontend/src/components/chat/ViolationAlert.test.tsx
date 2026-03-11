@@ -8,11 +8,11 @@ function createViolation(
   overrides: Partial<ViolationInfo> = {},
 ): ViolationInfo {
   return {
-    policy_id: "pol_weapons",
-    policy_name: "Weapons Prohibition",
-    formula_str: "H(p_weapon -> !q_comply)",
+    policy_id: "pol_fraud",
+    policy_name: "Fraud Prevention",
+    formula_str: "H(p_fraud -> !q_comply)",
     violated_at_index: 3,
-    labeling: { p_weapon: true, q_comply: true },
+    labeling: { p_fraud: true, q_comply: true },
     grounding_details: [],
     ...overrides,
   };
@@ -22,10 +22,10 @@ function createGroundingDetail(
   overrides: Partial<GroundingDetail> = {},
 ): GroundingDetail {
   return {
-    prop_id: "p_weapon",
+    prop_id: "p_fraud",
     match: true,
     confidence: 0.92,
-    reasoning: "User requested weapon instructions",
+    reasoning: "User requested fraud methods",
     method: "llm",
     ...overrides,
   };
@@ -83,7 +83,7 @@ describe("ViolationAlert", () => {
       createGroundingDetail({
         prop_id: "p_test_alpha",
         match: true,
-        reasoning: "Weapon request found",
+        reasoning: "Fraud request found",
       }),
       createGroundingDetail({
         prop_id: "q_test_beta",
@@ -105,7 +105,7 @@ describe("ViolationAlert", () => {
 
     expect(screen.getByText("p_test_alpha")).toBeInTheDocument();
     expect(screen.getByText(/matched/)).toBeInTheDocument();
-    expect(screen.getByText(/Weapon request found/)).toBeInTheDocument();
+    expect(screen.getByText(/Fraud request found/)).toBeInTheDocument();
     expect(screen.getByText("q_test_beta")).toBeInTheDocument();
     expect(screen.getByText(/no match/)).toBeInTheDocument();
     expect(screen.getByText(/Refusal detected/)).toBeInTheDocument();

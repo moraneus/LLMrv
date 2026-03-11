@@ -5,7 +5,7 @@ Comprehensive tests for the ptLTL parser and incremental monitor.
 Written FIRST (TDD philosophy) — implementation must satisfy every test.
 
 Examples tested:
-  - Example 1: Weapons Manufacturing Prohibition — H(p_weapon -> !q_comply)
+  - Example 1: Fraud Prevention — H(p_fraud -> !q_comply)
   - Example 2: Sensitive Data Handling — H(Y(ps) -> qw) & H(P(ps) -> !qe)
   - Example 3: Jailbreak Detection — H((pe & P(pf)) -> !qu)
 """
@@ -43,9 +43,9 @@ class TestParserAtomicAndLiterals:
 
     def test_parse_atomic_underscore(self):
         """Proposition with underscores."""
-        ast = parse("p_weapon")
+        ast = parse("p_fraud")
         assert isinstance(ast, PropNode)
-        assert ast.prop_id == "p_weapon"
+        assert ast.prop_id == "p_fraud"
 
     def test_parse_atomic_alphanumeric(self):
         """Proposition with digits."""
@@ -290,15 +290,15 @@ class TestParserBinaryOperators:
 class TestParserFormulas:
     """Parser — formula tests."""
 
-    def test_parse_weapons_formula(self):
-        """Example 1: H(p_weapon -> !q_comply)."""
-        ast = parse("H(p_weapon -> !q_comply)")
+    def test_parse_fraud_formula(self):
+        """Example 1: H(p_fraud -> !q_comply)."""
+        ast = parse("H(p_fraud -> !q_comply)")
         assert isinstance(ast, HistoricallyNode)
         impl = ast.child
         assert isinstance(impl, BinOpNode)
         assert impl.op == "->"
         assert isinstance(impl.left, PropNode)
-        assert impl.left.prop_id == "p_weapon"
+        assert impl.left.prop_id == "p_fraud"
         assert isinstance(impl.right, NotNode)
         assert isinstance(impl.right.child, PropNode)
         assert impl.right.child.prop_id == "q_comply"
@@ -532,7 +532,7 @@ class TestParserRoundtripProperties:
 
     def test_parse_preserves_proposition_names(self):
         """PropNode.prop_id matches the input identifier exactly."""
-        for name in ["p", "p_weapon", "myProp123", "x", "abc_def_ghi"]:
+        for name in ["p", "p_fraud", "myProp123", "x", "abc_def_ghi"]:
             ast = parse(name)
             assert isinstance(ast, PropNode)
             assert ast.prop_id == name
@@ -764,100 +764,100 @@ class TestMonitorTemporalOperators:
             assert monitor.step({"p": True, "q": False}) is False
 
 
-# PAPER EXAMPLE 1: WEAPONS MANUFACTURING PROHIBITION
-# Formula: H(p_weapon -> !q_comply)
+# PAPER EXAMPLE 1: FRAUD PREVENTION
+# Formula: H(p_fraud -> !q_comply)
 
 
-class TestMonitorWeapons:
-    """Monitor — Example 1: Weapons."""
+class TestMonitorFraud:
+    """Monitor — Example 1: Fraud Prevention."""
 
-    FORMULA = "H(p_weapon -> !q_comply)"
+    FORMULA = "H(p_fraud -> !q_comply)"
 
     def _make_monitor(self) -> PtLTLMonitor:
         return PtLTLMonitor(parse(self.FORMULA))
 
-    def test_weapons_all_benign(self):
-        """No weapon requests → H(F->X) = H(T) always True (vacuously)."""
+    def test_fraud_all_benign(self):
+        """No fraud requests → H(F->X) = H(T) always True (vacuously)."""
         monitor = self._make_monitor()
         for _ in range(6):
-            assert monitor.step({"p_weapon": False, "q_comply": False}) is True
+            assert monitor.step({"p_fraud": False, "q_comply": False}) is True
 
-    def test_weapons_request_refuse(self):
-        """p_weapon=T, q_comply=F → T->T = T → H stays True."""
+    def test_fraud_request_refuse(self):
+        """p_fraud=T, q_comply=F → T->T = T → H stays True."""
         monitor = self._make_monitor()
-        assert monitor.step({"p_weapon": True, "q_comply": False}) is True
+        assert monitor.step({"p_fraud": True, "q_comply": False}) is True
 
-    def test_weapons_request_comply_violation(self):
-        """p_weapon=T, q_comply=T → T->F = F → H = False."""
+    def test_fraud_request_comply_violation(self):
+        """p_fraud=T, q_comply=T → T->F = F → H = False."""
         monitor = self._make_monitor()
-        assert monitor.step({"p_weapon": True, "q_comply": True}) is False
+        assert monitor.step({"p_fraud": True, "q_comply": True}) is False
 
-    def test_weapons_full_trace_pass(self):
+    def test_fraud_full_trace_pass(self):
         """Example 1 full passing trace (6 steps).
 
         m0: system greeting         — pw=F, qc=F
         m1: user benign             — pw=F, qc=F
-        m2: user asks about weapons — pw=T, qc=F
+        m2: user asks about fraud — pf=T, qc=F
         m3: assistant refuses       — pw=F, qc=F
         m4: user asks again         — pw=T, qc=F
         m5: assistant refuses again — pw=F, qc=F
         """
         monitor = self._make_monitor()
         trace = [
-            {"p_weapon": False, "q_comply": False},
-            {"p_weapon": False, "q_comply": False},
-            {"p_weapon": True, "q_comply": False},
-            {"p_weapon": False, "q_comply": False},
-            {"p_weapon": True, "q_comply": False},
-            {"p_weapon": False, "q_comply": False},
+            {"p_fraud": False, "q_comply": False},
+            {"p_fraud": False, "q_comply": False},
+            {"p_fraud": True, "q_comply": False},
+            {"p_fraud": False, "q_comply": False},
+            {"p_fraud": True, "q_comply": False},
+            {"p_fraud": False, "q_comply": False},
         ]
         for labeling in trace:
             assert monitor.step(labeling) is True
         assert monitor.verdict is True
 
-    def test_weapons_full_trace_violation(self):
+    def test_fraud_full_trace_violation(self):
         """Same trace but assistant complies at step 3 → False."""
         monitor = self._make_monitor()
-        monitor.step({"p_weapon": False, "q_comply": False})  # m0
-        monitor.step({"p_weapon": False, "q_comply": False})  # m1
-        monitor.step({"p_weapon": True, "q_comply": False})  # m2
-        assert monitor.step({"p_weapon": True, "q_comply": True}) is False  # m3: VIOLATION
+        monitor.step({"p_fraud": False, "q_comply": False})  # m0
+        monitor.step({"p_fraud": False, "q_comply": False})  # m1
+        monitor.step({"p_fraud": True, "q_comply": False})  # m2
+        assert monitor.step({"p_fraud": True, "q_comply": True}) is False  # m3: VIOLATION
 
-    def test_weapons_violation_irrevocable(self):
+    def test_fraud_violation_irrevocable(self):
         """After violation at step 3, steps 4-5 remain False."""
         monitor = self._make_monitor()
-        monitor.step({"p_weapon": False, "q_comply": False})
-        monitor.step({"p_weapon": False, "q_comply": False})
-        monitor.step({"p_weapon": True, "q_comply": False})
-        monitor.step({"p_weapon": True, "q_comply": True})  # violation
+        monitor.step({"p_fraud": False, "q_comply": False})
+        monitor.step({"p_fraud": False, "q_comply": False})
+        monitor.step({"p_fraud": True, "q_comply": False})
+        monitor.step({"p_fraud": True, "q_comply": True})  # violation
         # Even benign steps remain False
-        assert monitor.step({"p_weapon": False, "q_comply": False}) is False
-        assert monitor.step({"p_weapon": False, "q_comply": False}) is False
+        assert monitor.step({"p_fraud": False, "q_comply": False}) is False
+        assert monitor.step({"p_fraud": False, "q_comply": False}) is False
         assert monitor.verdict is False
 
-    def test_weapons_step_by_step_labeling(self):
+    def test_fraud_step_by_step_labeling(self):
         """Verify exact verdict at each step in the passing trace."""
         monitor = self._make_monitor()
         expected_verdicts = [True, True, True, True, True, True]
         trace = [
-            {"p_weapon": False, "q_comply": False},
-            {"p_weapon": False, "q_comply": False},
-            {"p_weapon": True, "q_comply": False},
-            {"p_weapon": False, "q_comply": False},
-            {"p_weapon": True, "q_comply": False},
-            {"p_weapon": False, "q_comply": False},
+            {"p_fraud": False, "q_comply": False},
+            {"p_fraud": False, "q_comply": False},
+            {"p_fraud": True, "q_comply": False},
+            {"p_fraud": False, "q_comply": False},
+            {"p_fraud": True, "q_comply": False},
+            {"p_fraud": False, "q_comply": False},
         ]
         for i, (labeling, expected) in enumerate(zip(trace, expected_verdicts, strict=True)):
             result = monitor.step(labeling)
             assert result is expected, f"Step {i}: expected {expected}, got {result}"
 
-    def test_weapons_delayed_request(self):
-        """First 4 steps benign, weapon request at step 5 → still True (no comply)."""
+    def test_fraud_delayed_request(self):
+        """First 4 steps benign, fraud request at step 5 → still True (no comply)."""
         monitor = self._make_monitor()
         for _ in range(4):
-            monitor.step({"p_weapon": False, "q_comply": False})
+            monitor.step({"p_fraud": False, "q_comply": False})
         # Request at step 5 but no compliance → implication holds
-        assert monitor.step({"p_weapon": True, "q_comply": False}) is True
+        assert monitor.step({"p_fraud": True, "q_comply": False}) is True
         assert monitor.verdict is True
 
 
@@ -1106,8 +1106,8 @@ class TestMonitorStateManagement:
 
     def test_monitor_state_serializable(self):
         """json.dumps(state_snapshot) succeeds and round-trips."""
-        monitor = PtLTLMonitor(parse("H(p_weapon -> !q_comply)"))
-        monitor.step({"p_weapon": True, "q_comply": False})
+        monitor = PtLTLMonitor(parse("H(p_fraud -> !q_comply)"))
+        monitor.step({"p_fraud": True, "q_comply": False})
         snap = monitor.state_snapshot
         json_str = json.dumps(snap)
         restored = json.loads(json_str)

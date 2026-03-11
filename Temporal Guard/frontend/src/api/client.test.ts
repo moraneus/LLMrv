@@ -214,8 +214,8 @@ describe("Propositions endpoints", () => {
 
   it("createProposition sends POST /api/propositions with body", async () => {
     const input = {
-      prop_id: "p_weapon",
-      description: "User requests weapons",
+      prop_id: "p_fraud",
+      description: "User requests fraud methods",
       role: "user",
     };
     const created = createProposition();
@@ -233,11 +233,11 @@ describe("Propositions endpoints", () => {
     const updated = createProposition({ description: "Updated description" });
     mockFetchOk(updated);
 
-    const result = await updateProposition("p_weapon", {
+    const result = await updateProposition("p_fraud", {
       description: "Updated description",
     });
 
-    expect(fetchCallUrl()).toBe("/api/propositions/p_weapon");
+    expect(fetchCallUrl()).toBe("/api/propositions/p_fraud");
     expect(fetchCallOptions().method).toBe("PUT");
     expect(JSON.parse(fetchCallOptions().body as string)).toEqual({
       description: "Updated description",
@@ -248,9 +248,9 @@ describe("Propositions endpoints", () => {
   it("deleteProposition sends DELETE with encoded prop_id", async () => {
     mockFetch204();
 
-    await deleteProposition("p_weapon");
+    await deleteProposition("p_fraud");
 
-    expect(fetchCallUrl()).toBe("/api/propositions/p_weapon");
+    expect(fetchCallUrl()).toBe("/api/propositions/p_fraud");
     expect(fetchCallOptions().method).toBe("DELETE");
   });
 });
@@ -270,8 +270,8 @@ describe("Policies endpoints", () => {
 
   it("createPolicy sends POST /api/policies with body", async () => {
     const input = {
-      name: "Weapons Ban",
-      formula_str: "H(p_weapon -> !q_comply)",
+      name: "Fraud Prevention",
+      formula_str: "H(p_fraud -> !q_comply)",
       enabled: true,
     };
     const created = createPolicy();
@@ -288,9 +288,9 @@ describe("Policies endpoints", () => {
   it("deletePolicy sends DELETE with encoded policy_id", async () => {
     mockFetch204();
 
-    await deletePolicy("pol_weapons");
+    await deletePolicy("pol_fraud");
 
-    expect(fetchCallUrl()).toBe("/api/policies/pol_weapons");
+    expect(fetchCallUrl()).toBe("/api/policies/pol_fraud");
     expect(fetchCallOptions().method).toBe("DELETE");
   });
 });
@@ -303,7 +303,7 @@ describe("Chat endpoints", () => {
       blocked: false,
       response: "Hello! How can I help you?",
       violation: null,
-      monitor_state: { pol_weapons: true },
+      monitor_state: { pol_fraud: true },
       blocked_response: false,
     };
     mockFetchOk(response);

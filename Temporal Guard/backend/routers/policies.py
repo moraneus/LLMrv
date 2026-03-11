@@ -272,12 +272,15 @@ async def create_proposition(request: Request, body: CreatePropositionRequest) -
 
     settings = await _load_settings(db)
     effective_chat_model = settings.openrouter_model_custom or settings.openrouter_model
-    few_shot_positive, few_shot_negative = await _generate_few_shots_with_chat_model(
-        openrouter_api_key=settings.openrouter_api_key,
-        chat_model=effective_chat_model,
-        proposition_description=body.description,
-        role=body.role,
-    )
+    if settings.openrouter_api_key:
+        few_shot_positive, few_shot_negative = await _generate_few_shots_with_chat_model(
+            openrouter_api_key=settings.openrouter_api_key,
+            chat_model=effective_chat_model,
+            proposition_description=body.description,
+            role=body.role,
+        )
+    else:
+        few_shot_positive, few_shot_negative = [], []
 
     generated_at = datetime.now(timezone.utc).isoformat()
     await db.create_proposition(

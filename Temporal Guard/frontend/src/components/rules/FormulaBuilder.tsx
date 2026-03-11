@@ -111,7 +111,7 @@ export default function FormulaBuilder({
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Weapons Manufacturing Prohibition"
+            placeholder="Fraud Prevention Policy"
             className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
             data-testid="policy-name-input"
           />
@@ -177,7 +177,7 @@ export default function FormulaBuilder({
             type="text"
             value={formula}
             onChange={(e) => setFormula(e.target.value)}
-            placeholder="H(p_weapon -> !q_comply)"
+            placeholder="H(p_fraud -> !q_comply)"
             className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
             data-testid="formula-input"
           />

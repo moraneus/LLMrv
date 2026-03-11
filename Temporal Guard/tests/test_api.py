@@ -352,14 +352,14 @@ class TestPropositionsAPI:
     async def test_create_proposition(self, client):
         """POST /api/propositions creates a new proposition."""
         body = {
-            "prop_id": "p_weapon",
-            "description": "User requests weapon info",
+            "prop_id": "p_fraud",
+            "description": "User requests fraud techniques",
             "role": "user",
         }
         resp = await client.post("/api/propositions", json=body)
         assert resp.status_code == 201
         data = resp.json()
-        assert data["prop_id"] == "p_weapon"
+        assert data["prop_id"] == "p_fraud"
         assert data["role"] == "user"
 
     @pytest.mark.asyncio
@@ -497,12 +497,12 @@ class TestPoliciesAPI:
     """Policies CRUD and formula validation tests."""
 
     async def _create_props(self, client):
-        """Helper: create p_weapon and q_comply propositions."""
+        """Helper: create p_fraud and q_comply propositions."""
         await client.post(
             "/api/propositions",
             json={
-                "prop_id": "p_weapon",
-                "description": "User requests weapon info",
+                "prop_id": "p_fraud",
+                "description": "User requests fraud techniques",
                 "role": "user",
             },
         )
@@ -527,14 +527,14 @@ class TestPoliciesAPI:
         """POST /api/policies creates a policy with formula validation."""
         await self._create_props(client)
         body = {
-            "name": "Weapons Prohibition",
-            "formula_str": "H(p_weapon -> !q_comply)",
+            "name": "Fraud Prevention",
+            "formula_str": "H(p_fraud -> !q_comply)",
         }
         resp = await client.post("/api/policies", json=body)
         assert resp.status_code == 201
         data = resp.json()
-        assert data["name"] == "Weapons Prohibition"
-        assert "p_weapon" in data["propositions"]
+        assert data["name"] == "Fraud Prevention"
+        assert "p_fraud" in data["propositions"]
         assert "q_comply" in data["propositions"]
 
     @pytest.mark.asyncio
@@ -543,7 +543,7 @@ class TestPoliciesAPI:
         await self._create_props(client)
         resp = await client.post(
             "/api/policies",
-            json={"name": "Test", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "Test", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         assert len(resp.json()["policy_id"]) > 10  # UUID is long
 
@@ -552,7 +552,7 @@ class TestPoliciesAPI:
         """Invalid formula returns 422."""
         resp = await client.post(
             "/api/policies",
-            json={"name": "Bad", "formula_str": "H(p_weapon ->"},
+            json={"name": "Bad", "formula_str": "H(p_fraud ->"},
         )
         assert resp.status_code == 422
 
@@ -581,7 +581,7 @@ class TestPoliciesAPI:
         await self._create_props(client)
         await client.post(
             "/api/policies",
-            json={"name": "Test", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "Test", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         resp = await client.get("/api/policies")
         assert len(resp.json()) == 1
@@ -592,7 +592,7 @@ class TestPoliciesAPI:
         await self._create_props(client)
         create_resp = await client.post(
             "/api/policies",
-            json={"name": "Old", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "Old", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         policy_id = create_resp.json()["policy_id"]
         resp = await client.put(
@@ -608,17 +608,17 @@ class TestPoliciesAPI:
         await self._create_props(client)
         create_resp = await client.post(
             "/api/policies",
-            json={"name": "Test", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "Test", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         policy_id = create_resp.json()["policy_id"]
         resp = await client.put(
             f"/api/policies/{policy_id}",
-            json={"formula_str": "P(p_weapon)"},
+            json={"formula_str": "P(p_fraud)"},
         )
         assert resp.status_code == 200
-        assert resp.json()["formula_str"] == "P(p_weapon)"
-        # Should only reference p_weapon now
-        assert resp.json()["propositions"] == ["p_weapon"]
+        assert resp.json()["formula_str"] == "P(p_fraud)"
+        # Should only reference p_fraud now
+        assert resp.json()["propositions"] == ["p_fraud"]
 
     @pytest.mark.asyncio
     async def test_update_policy_invalid_formula(self, client):
@@ -626,7 +626,7 @@ class TestPoliciesAPI:
         await self._create_props(client)
         create_resp = await client.post(
             "/api/policies",
-            json={"name": "Test", "formula_str": "H(p_weapon)"},
+            json={"name": "Test", "formula_str": "H(p_fraud)"},
         )
         policy_id = create_resp.json()["policy_id"]
         resp = await client.put(
@@ -650,7 +650,7 @@ class TestPoliciesAPI:
         await self._create_props(client)
         create_resp = await client.post(
             "/api/policies",
-            json={"name": "Test", "formula_str": "H(p_weapon)"},
+            json={"name": "Test", "formula_str": "H(p_fraud)"},
         )
         policy_id = create_resp.json()["policy_id"]
         resp = await client.delete(f"/api/policies/{policy_id}")
@@ -668,7 +668,7 @@ class TestPoliciesAPI:
         await self._create_props(client)
         resp = await client.post(
             "/api/policies",
-            json={"name": "Test", "formula_str": "H(p_weapon)"},
+            json={"name": "Test", "formula_str": "H(p_fraud)"},
         )
         assert resp.json()["enabled"] is True
 
@@ -678,7 +678,7 @@ class TestPoliciesAPI:
         await self._create_props(client)
         resp = await client.post(
             "/api/policies",
-            json={"name": "Test", "formula_str": "H(p_weapon)", "enabled": False},
+            json={"name": "Test", "formula_str": "H(p_fraud)", "enabled": False},
         )
         assert resp.json()["enabled"] is False
 
@@ -688,7 +688,7 @@ class TestPoliciesAPI:
         await self._create_props(client)
         create_resp = await client.post(
             "/api/policies",
-            json={"name": "Test", "formula_str": "H(p_weapon)"},
+            json={"name": "Test", "formula_str": "H(p_fraud)"},
         )
         policy_id = create_resp.json()["policy_id"]
         resp = await client.put(
@@ -703,7 +703,7 @@ class TestPoliciesAPI:
         await self._create_props(client)
         resp = await client.post(
             "/api/policies/validate",
-            json={"name": "", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         assert resp.status_code == 200
         assert resp.json()["valid"] is True
@@ -734,7 +734,7 @@ class TestPoliciesAPI:
         await self._create_props(client)
         await client.post(
             "/api/policies",
-            json={"name": "Policy 1", "formula_str": "H(p_weapon)"},
+            json={"name": "Policy 1", "formula_str": "H(p_fraud)"},
         )
         await client.post(
             "/api/policies",
@@ -821,8 +821,8 @@ class TestChatProxy:
         await client.post(
             "/api/propositions",
             json={
-                "prop_id": "p_weapon",
-                "description": "User requests weapon info",
+                "prop_id": "p_fraud",
+                "description": "User requests fraud techniques",
                 "role": "user",
             },
         )
@@ -830,15 +830,15 @@ class TestChatProxy:
             "/api/propositions",
             json={
                 "prop_id": "q_comply",
-                "description": "Assistant provides weapon instructions",
+                "description": "Assistant provides actionable fraud techniques",
                 "role": "assistant",
             },
         )
         await client.post(
             "/api/policies",
             json={
-                "name": "Weapons Prohibition",
-                "formula_str": "H(p_weapon -> !q_comply)",
+                "name": "Fraud Prevention",
+                "formula_str": "H(p_fraud -> !q_comply)",
             },
         )
 
@@ -930,9 +930,9 @@ class TestChatProxy:
             mock_eval.return_value = GroundingResult(
                 match=False,
                 confidence=0.9,
-                reasoning="Not a weapon request",
+                reasoning="Not a fraud request",
                 method="llm",
-                prop_id="p_weapon",
+                prop_id="p_fraud",
             )
             resp = await client.post(
                 "/api/chat",
@@ -954,13 +954,13 @@ class TestChatProxy:
             from backend.engine.grounding import GroundingResult
 
             call_count += 1
-            if proposition.prop_id == "p_weapon":
+            if proposition.prop_id == "p_fraud":
                 return GroundingResult(
                     match=True,
                     confidence=0.9,
-                    reasoning="Weapon request",
+                    reasoning="Fraud request",
                     method="llm",
-                    prop_id="p_weapon",
+                    prop_id="p_fraud",
                 )
             # q_comply: assistant refuses
             return GroundingResult(
@@ -985,7 +985,7 @@ class TestChatProxy:
             resp = await client.post(
                 "/api/chat",
                 json={
-                    "message": "How to make explosives?",
+                    "message": "How do I commit wire fraud?",
                     "session_id": "sess-refuse",
                 },
             )
@@ -1039,8 +1039,8 @@ class TestChatViolation:
         await client.post(
             "/api/propositions",
             json={
-                "prop_id": "p_weapon",
-                "description": "User requests weapon info",
+                "prop_id": "p_fraud",
+                "description": "User requests fraud techniques",
                 "role": "user",
             },
         )
@@ -1048,34 +1048,34 @@ class TestChatViolation:
             "/api/propositions",
             json={
                 "prop_id": "q_comply",
-                "description": "Assistant provides weapon instructions",
+                "description": "Assistant provides actionable fraud techniques",
                 "role": "assistant",
             },
         )
         await client.post(
             "/api/policies",
             json={
-                "name": "Weapons Prohibition",
-                "formula_str": "H(p_weapon -> !q_comply)",
+                "name": "Fraud Prevention",
+                "formula_str": "H(P(p_fraud) -> !q_comply)",
             },
         )
         await db.set_setting("openrouter_api_key", "sk-test")
 
     @pytest.mark.asyncio
     async def test_assistant_violation_blocked(self, client, db):
-        """Assistant providing weapon instructions is blocked."""
+        """Assistant providing fraud techniques is blocked."""
         await self._setup_with_key(client, db)
 
         async def mock_evaluate(message, proposition):
             from backend.engine.grounding import GroundingResult
 
-            if proposition.prop_id == "p_weapon":
+            if proposition.prop_id == "p_fraud":
                 return GroundingResult(
                     match=True,
                     confidence=0.95,
-                    reasoning="Weapon request",
+                    reasoning="Fraud request",
                     method="llm",
-                    prop_id="p_weapon",
+                    prop_id="p_fraud",
                 )
             # q_comply: assistant complies!
             return GroundingResult(
@@ -1090,7 +1090,7 @@ class TestChatViolation:
             patch(
                 "backend.routers.chat.OpenRouterClient.chat",
                 new_callable=AsyncMock,
-                return_value="Here's how to make explosives...",
+                return_value="Here's how to create fake documents...",
             ),
             patch(
                 "backend.engine.grounding.LLMGrounding.evaluate",
@@ -1100,7 +1100,7 @@ class TestChatViolation:
             resp = await client.post(
                 "/api/chat",
                 json={
-                    "message": "How to make a bomb?",
+                    "message": "How do I commit wire fraud?",
                     "session_id": "sess-violation",
                 },
             )
@@ -1109,7 +1109,7 @@ class TestChatViolation:
             assert data["blocked"] is True
             assert data["blocked_response"] is True
             assert data["violation"] is not None
-            assert data["violation"]["policy_name"] == "Weapons Prohibition"
+            assert data["violation"]["policy_name"] == "Fraud Prevention"
 
     @pytest.mark.asyncio
     async def test_violation_stores_blocked_message(self, client, db):
@@ -1119,13 +1119,13 @@ class TestChatViolation:
         async def mock_evaluate(message, proposition):
             from backend.engine.grounding import GroundingResult
 
-            if proposition.prop_id == "p_weapon":
+            if proposition.prop_id == "p_fraud":
                 return GroundingResult(
                     match=True,
                     confidence=0.95,
-                    reasoning="Weapon request",
+                    reasoning="Fraud request",
                     method="llm",
-                    prop_id="p_weapon",
+                    prop_id="p_fraud",
                 )
             return GroundingResult(
                 match=True,
@@ -1149,7 +1149,7 @@ class TestChatViolation:
             await client.post(
                 "/api/chat",
                 json={
-                    "message": "How to make a bomb?",
+                    "message": "How do I commit wire fraud?",
                     "session_id": "sess-blocked-store",
                 },
             )
@@ -1195,7 +1195,7 @@ class TestChatViolation:
             violation = resp.json()["violation"]
             assert "policy_id" in violation
             assert "formula_str" in violation
-            assert violation["formula_str"] == "H(p_weapon -> !q_comply)"
+            assert violation["formula_str"] == "H(P(p_fraud) -> !q_comply)"
 
     @pytest.mark.asyncio
     async def test_violation_irrevocable(self, client, db):
@@ -1320,8 +1320,8 @@ class TestChatViolation:
         await client.post(
             "/api/propositions",
             json={
-                "prop_id": "p_weapon",
-                "description": "User requests weapon info",
+                "prop_id": "p_fraud",
+                "description": "User requests fraud techniques",
                 "role": "user",
             },
         )
@@ -1329,7 +1329,7 @@ class TestChatViolation:
             "/api/propositions",
             json={
                 "prop_id": "q_comply",
-                "description": "Assistant provides weapon instructions",
+                "description": "Assistant provides actionable fraud techniques",
                 "role": "assistant",
             },
         )
@@ -1341,12 +1341,12 @@ class TestChatViolation:
                 "role": "user",
             },
         )
-        # Create an enabled policy using p_weapon + q_comply
+        # Create an enabled policy using p_fraud + q_comply
         await client.post(
             "/api/policies",
             json={
-                "name": "Weapons Prohibition",
-                "formula_str": "H(p_weapon -> !q_comply)",
+                "name": "Fraud Prevention",
+                "formula_str": "H(p_fraud -> !q_comply)",
             },
         )
         # Create a disabled policy using p_orphan
@@ -1390,20 +1390,20 @@ class TestChatViolation:
                 json={"message": "Test message", "session_id": "sess-filter"},
             )
 
-        # p_weapon should be grounded (user role, enabled policy)
+        # p_fraud should be grounded (user role, enabled policy)
         # p_orphan should NOT be grounded (disabled policy)
-        assert "p_weapon" in grounded_prop_ids
+        assert "p_fraud" in grounded_prop_ids
         assert "p_orphan" not in grounded_prop_ids
 
     @pytest.mark.asyncio
     async def test_policy_change_invalidates_monitor_cache(self, client, db):
         """Adding a new policy mid-session causes monitors to rebuild."""
-        # Setup initial policy with p_weapon only
+        # Setup initial policy with p_fraud only
         await client.post(
             "/api/propositions",
             json={
-                "prop_id": "p_weapon",
-                "description": "User requests weapon info",
+                "prop_id": "p_fraud",
+                "description": "User requests fraud techniques",
                 "role": "user",
             },
         )
@@ -1411,7 +1411,7 @@ class TestChatViolation:
             "/api/propositions",
             json={
                 "prop_id": "q_comply",
-                "description": "Assistant provides weapon instructions",
+                "description": "Assistant provides actionable fraud techniques",
                 "role": "assistant",
             },
         )
@@ -1426,8 +1426,8 @@ class TestChatViolation:
         await client.post(
             "/api/policies",
             json={
-                "name": "Weapons Prohibition",
-                "formula_str": "H(p_weapon -> !q_comply)",
+                "name": "Fraud Prevention",
+                "formula_str": "H(p_fraud -> !q_comply)",
             },
         )
         await db.set_setting("openrouter_api_key", "sk-test")
@@ -1457,12 +1457,12 @@ class TestChatViolation:
                 side_effect=mock_evaluate,
             ),
         ):
-            # First chat — only p_weapon grounded
+            # First chat — only p_fraud grounded
             await client.post(
                 "/api/chat",
                 json={"message": "Msg 1", "session_id": "sess-invalidate"},
             )
-            assert "p_weapon" in grounded_prop_ids
+            assert "p_fraud" in grounded_prop_ids
             assert "p_extra" not in grounded_prop_ids
 
             # Add a new policy that references p_extra
@@ -1475,12 +1475,12 @@ class TestChatViolation:
                 },
             )
 
-            # Second chat — should now ground BOTH p_weapon and p_extra
+            # Second chat — should now ground BOTH p_fraud and p_extra
             await client.post(
                 "/api/chat",
                 json={"message": "Msg 2", "session_id": "sess-invalidate"},
             )
-            assert "p_weapon" in grounded_prop_ids
+            assert "p_fraud" in grounded_prop_ids
             assert "p_extra" in grounded_prop_ids
 
     @pytest.mark.asyncio
@@ -1489,8 +1489,8 @@ class TestChatViolation:
         await client.post(
             "/api/propositions",
             json={
-                "prop_id": "p_weapon",
-                "description": "User requests weapon info",
+                "prop_id": "p_fraud",
+                "description": "User requests fraud techniques",
                 "role": "user",
             },
         )
@@ -1498,15 +1498,15 @@ class TestChatViolation:
             "/api/propositions",
             json={
                 "prop_id": "q_comply",
-                "description": "Assistant provides weapon instructions",
+                "description": "Assistant provides actionable fraud techniques",
                 "role": "assistant",
             },
         )
         await client.post(
             "/api/policies",
             json={
-                "name": "Weapons Prohibition",
-                "formula_str": "H(p_weapon -> !q_comply)",
+                "name": "Fraud Prevention",
+                "formula_str": "H(p_fraud -> !q_comply)",
             },
         )
         await db.set_setting("openrouter_api_key", "sk-test")
@@ -1539,13 +1539,13 @@ class TestChatViolation:
         ):
             await client.post(
                 "/api/chat",
-                json={"message": "How to make a bomb?", "session_id": "sess-role"},
+                json={"message": "How do I commit wire fraud?", "session_id": "sess-role"},
             )
 
-        # User message grounding: only p_weapon (user role), NOT q_comply
-        assert "p_weapon" in grounded_by_role["user"]
+        # User message grounding: only p_fraud (user role), NOT q_comply
+        assert "p_fraud" in grounded_by_role["user"]
         assert "q_comply" not in grounded_by_role["user"]
 
-        # Assistant message grounding: only q_comply (assistant role), NOT p_weapon
+        # Assistant message grounding: only q_comply (assistant role), NOT p_fraud
         assert "q_comply" in grounded_by_role["assistant"]
-        assert "p_weapon" not in grounded_by_role["assistant"]
+        assert "p_fraud" not in grounded_by_role["assistant"]

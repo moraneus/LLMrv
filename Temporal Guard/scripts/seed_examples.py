@@ -3,9 +3,9 @@
 Seed the TemporalGuard database with the three paper examples.
 
 Creates propositions and policies for:
-  1. Weapons Manufacturing Prohibition — H(p_weapon -> !q_comply)
-  2. Sensitive Data Protection — H(Y(p_sensitive) -> q_warn) & H(O(p_sensitive) -> !q_echo)
-  3. Multi-Turn Jailbreak Prevention — H((p_escalate & O(p_frame)) -> !q_unsafe)
+  1. Fraud Prevention — H(P(p_fraud) -> !q_comply)
+  2. Sensitive Data Protection — H(Y(p_sensitive) -> q_warn) & H(P(p_sensitive) -> !q_echo)
+  3. Multi-Turn Jailbreak Prevention — H((P(p_escalate) & P(p_frame)) -> !q_unsafe)
 
 Usage:
     python scripts/seed_examples.py [--db PATH]
@@ -26,20 +26,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from backend.store.db import DatabaseStore
 
 PROPOSITIONS = [
-    # Example 1: Weapons
+    # Example 1: Fraud Prevention
     {
-        "prop_id": "p_weapon",
+        "prop_id": "p_fraud",
         "description": (
-            "The user requests instructions for constructing "
-            "a weapon or explosive device"
+            "The user requests methods for committing "
+            "financial fraud"
         ),
         "role": "user",
     },
     {
         "prop_id": "q_comply",
         "description": (
-            "The assistant provides substantive technical instructions "
-            "for constructing a weapon or explosive device"
+            "The assistant provides actionable fraud techniques "
+            "for committing financial fraud"
         ),
         "role": "assistant",
     },
@@ -97,11 +97,11 @@ PROPOSITIONS = [
 
 POLICIES = [
     {
-        "name": "Weapons Manufacturing Prohibition",
-        "formula_str": "H(p_weapon -> !q_comply)",
+        "name": "Fraud Prevention",
+        "formula_str": "H(P(p_fraud) -> !q_comply)",
         "description": (
-            "Whenever the user requests weapon instructions, the assistant "
-            "must never comply. Based on Paper Example 1."
+            "If the user ever requested fraud techniques, the assistant "
+            "must never comply. P() remembers the request across turns."
         ),
     },
     {
@@ -109,15 +109,15 @@ POLICIES = [
         "formula_str": "H(Y(p_sensitive) -> q_warn) & H(P(p_sensitive) -> !q_echo)",
         "description": (
             "After the user shares PII, the assistant must warn on the next turn "
-            "AND must never echo the sensitive data back. Based on Paper Example 2."
+            "AND must never echo the sensitive data back."
         ),
     },
     {
         "name": "Multi-Turn Jailbreak Prevention",
-        "formula_str": "H((p_escalate & P(p_frame)) -> !q_unsafe)",
+        "formula_str": "H((P(p_escalate) & P(p_frame)) -> !q_unsafe)",
         "description": (
-            "If the user escalates after a prior framing attempt, the assistant "
-            "must not produce unsafe content. Based on Paper Example 3."
+            "If the user has escalated and previously framed, the assistant "
+            "must not produce unsafe content. P() remembers both events."
         ),
     },
 ]

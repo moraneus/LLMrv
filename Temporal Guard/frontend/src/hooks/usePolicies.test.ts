@@ -30,13 +30,13 @@ import {
 } from "../test/mocks";
 
 describe("usePolicies", () => {
-  const propWeapon = mockProposition();
+  const propFraud = mockProposition();
   const propComply = mockProposition({
     prop_id: "q_comply",
     role: "assistant",
-    description: "The assistant provides weapon instructions",
+    description: "The assistant provides fraud instructions",
   });
-  const policyWeapons = mockPolicy();
+  const policyFraud = mockPolicy();
   const policySensitive = mockPolicy({
     policy_id: "pol_sensitive",
     name: "Sensitive Data",
@@ -46,8 +46,8 @@ describe("usePolicies", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getPropositions).mockResolvedValue([propWeapon, propComply]);
-    vi.mocked(getPolicies).mockResolvedValue([policyWeapons, policySensitive]);
+    vi.mocked(getPropositions).mockResolvedValue([propFraud, propComply]);
+    vi.mocked(getPolicies).mockResolvedValue([policyFraud, policySensitive]);
   });
 
   it("fetches propositions on mount", async () => {
@@ -60,7 +60,7 @@ describe("usePolicies", () => {
     expect(getPropositions).toHaveBeenCalledOnce();
     if (result.current.propositions.status === "success") {
       expect(result.current.propositions.data).toEqual([
-        propWeapon,
+        propFraud,
         propComply,
       ]);
       expect(result.current.propositions.data).toHaveLength(2);
@@ -77,7 +77,7 @@ describe("usePolicies", () => {
     expect(getPolicies).toHaveBeenCalledOnce();
     if (result.current.policies.status === "success") {
       expect(result.current.policies.data).toEqual([
-        policyWeapons,
+        policyFraud,
         policySensitive,
       ]);
       expect(result.current.policies.data).toHaveLength(2);
@@ -130,10 +130,10 @@ describe("usePolicies", () => {
     });
 
     await act(async () => {
-      await result.current.deleteProposition("p_weapon");
+      await result.current.deleteProposition("p_fraud");
     });
 
-    expect(apiDeleteProposition).toHaveBeenCalledWith("p_weapon");
+    expect(apiDeleteProposition).toHaveBeenCalledWith("p_fraud");
 
     if (result.current.propositions.status === "success") {
       expect(result.current.propositions.data).toHaveLength(1);
@@ -187,10 +187,10 @@ describe("usePolicies", () => {
     });
 
     await act(async () => {
-      await result.current.deletePolicy("pol_weapons");
+      await result.current.deletePolicy("pol_fraud");
     });
 
-    expect(apiDeletePolicy).toHaveBeenCalledWith("pol_weapons");
+    expect(apiDeletePolicy).toHaveBeenCalledWith("pol_fraud");
 
     if (result.current.policies.status === "success") {
       expect(result.current.policies.data).toHaveLength(1);
@@ -200,7 +200,7 @@ describe("usePolicies", () => {
 
   it("togglePolicy calls updatePolicy with toggled enabled flag", async () => {
     vi.mocked(apiUpdatePolicy).mockResolvedValue({
-      ...policyWeapons,
+      ...policyFraud,
       enabled: false,
     });
 
@@ -211,10 +211,10 @@ describe("usePolicies", () => {
     });
 
     await act(async () => {
-      await result.current.togglePolicy("pol_weapons", false);
+      await result.current.togglePolicy("pol_fraud", false);
     });
 
-    expect(apiUpdatePolicy).toHaveBeenCalledWith("pol_weapons", {
+    expect(apiUpdatePolicy).toHaveBeenCalledWith("pol_fraud", {
       enabled: false,
     });
   });
@@ -236,20 +236,20 @@ describe("usePolicies", () => {
 
     // Start the toggle (don't await it)
     act(() => {
-      void result.current.togglePolicy("pol_weapons", false);
+      void result.current.togglePolicy("pol_fraud", false);
     });
 
     // Check the optimistic update happened immediately
     if (result.current.policies.status === "success") {
       const toggled = result.current.policies.data.find(
-        (p) => p.policy_id === "pol_weapons",
+        (p) => p.policy_id === "pol_fraud",
       );
       expect(toggled?.enabled).toBe(false);
     }
 
     // Resolve the API call
     await act(async () => {
-      resolveUpdate?.({ ...policyWeapons, enabled: false });
+      resolveUpdate?.({ ...policyFraud, enabled: false });
     });
   });
 
@@ -265,19 +265,19 @@ describe("usePolicies", () => {
     // Verify initially enabled
     if (result.current.policies.status === "success") {
       const before = result.current.policies.data.find(
-        (p) => p.policy_id === "pol_weapons",
+        (p) => p.policy_id === "pol_fraud",
       );
       expect(before?.enabled).toBe(true);
     }
 
     await act(async () => {
-      await result.current.togglePolicy("pol_weapons", false);
+      await result.current.togglePolicy("pol_fraud", false);
     });
 
     // Should revert back to enabled=true after error
     if (result.current.policies.status === "success") {
       const after = result.current.policies.data.find(
-        (p) => p.policy_id === "pol_weapons",
+        (p) => p.policy_id === "pol_fraud",
       );
       expect(after?.enabled).toBe(true);
     }

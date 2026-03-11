@@ -124,7 +124,7 @@ class TestPropositionEditor:
         app_page.click('[data-testid="nav-rules"]')
         app_page.click('[data-testid="add-proposition"]')
         expect(app_page.locator('[data-testid="prop-id-input"]')).to_have_attribute(
-            "placeholder", "p_weapon"
+            "placeholder", "p_fraud"
         )
 
 

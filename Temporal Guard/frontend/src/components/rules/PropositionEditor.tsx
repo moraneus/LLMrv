@@ -65,7 +65,7 @@ export default function PropositionEditor({
             value={propId}
             onChange={(e) => setPropId(e.target.value)}
             disabled={isEdit}
-            placeholder="p_weapon"
+            placeholder="p_fraud"
             className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-slate-50 disabled:text-slate-400"
             data-testid="prop-id-input"
           />
@@ -115,7 +115,7 @@ export default function PropositionEditor({
             name="description"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="The user requests instructions for constructing a weapon"
+            placeholder="The user requests methods for committing financial fraud"
             rows={3}
             className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
             data-testid="prop-description-input"

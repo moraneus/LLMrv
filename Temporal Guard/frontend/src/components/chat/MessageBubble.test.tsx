@@ -8,11 +8,11 @@ function createViolation(
   overrides: Partial<ViolationInfo> = {},
 ): ViolationInfo {
   return {
-    policy_id: "pol_weapons",
-    policy_name: "Weapons Prohibition",
-    formula_str: "H(p_weapon -> !q_comply)",
+    policy_id: "pol_fraud",
+    policy_name: "Fraud Prevention",
+    formula_str: "H(p_fraud -> !q_comply)",
     violated_at_index: 2,
-    labeling: { p_weapon: true, q_comply: true },
+    labeling: { p_fraud: true, q_comply: true },
     grounding_details: [],
     ...overrides,
   };
@@ -22,10 +22,10 @@ function createGroundingDetail(
   overrides: Partial<GroundingDetail> = {},
 ): GroundingDetail {
   return {
-    prop_id: "p_weapon",
+    prop_id: "p_fraud",
     match: true,
     confidence: 0.95,
-    reasoning: "User explicitly requested weapon instructions",
+    reasoning: "User explicitly requested fraud methods",
     method: "llm",
     ...overrides,
   };
@@ -130,7 +130,7 @@ describe("MessageBubble", () => {
         role="assistant"
         content="Bad response"
         blocked={true}
-        violationInfo={createViolation({ policy_name: "Weapons Prohibition" })}
+        violationInfo={createViolation({ policy_name: "Fraud Prevention" })}
         groundingDetails={null}
         monitorState={null}
       />,
@@ -143,19 +143,19 @@ describe("MessageBubble", () => {
 
     expect(screen.getByTestId("message-details")).toBeInTheDocument();
     expect(
-      screen.getByText("Violation: Weapons Prohibition"),
+      screen.getByText("Violation: Fraud Prevention"),
     ).toBeInTheDocument();
-    expect(screen.getByText("H(p_weapon -> !q_comply)")).toBeInTheDocument();
+    expect(screen.getByText("H(p_fraud -> !q_comply)")).toBeInTheDocument();
   });
 
   it("shows grounding details in expanded panel", async () => {
     const user = userEvent.setup();
     const details = [
       createGroundingDetail({
-        prop_id: "p_weapon",
+        prop_id: "p_fraud",
         match: true,
         confidence: 0.95,
-        reasoning: "Weapon request detected",
+        reasoning: "Fraud request detected",
       }),
       createGroundingDetail({
         prop_id: "q_comply",
@@ -179,10 +179,10 @@ describe("MessageBubble", () => {
     await user.click(screen.getByTestId("toggle-details"));
 
     expect(screen.getByText("Grounding:")).toBeInTheDocument();
-    expect(screen.getByText("p_weapon")).toBeInTheDocument();
+    expect(screen.getByText("p_fraud")).toBeInTheDocument();
     expect(screen.getByText("Match")).toBeInTheDocument();
     expect(screen.getByText("(95%)")).toBeInTheDocument();
-    expect(screen.getByText("Weapon request detected")).toBeInTheDocument();
+    expect(screen.getByText("Fraud request detected")).toBeInTheDocument();
     expect(screen.getByText("q_comply")).toBeInTheDocument();
     expect(screen.getByText("No match")).toBeInTheDocument();
   });
@@ -196,14 +196,14 @@ describe("MessageBubble", () => {
         blocked={false}
         violationInfo={null}
         groundingDetails={null}
-        monitorState={{ pol_weapons: true, pol_sensitive: false }}
+        monitorState={{ pol_fraud: true, pol_sensitive: false }}
       />,
     );
 
     await user.click(screen.getByTestId("toggle-details"));
 
     expect(screen.getByText("Monitor:")).toBeInTheDocument();
-    expect(screen.getByText("pol_weapons: Pass")).toBeInTheDocument();
+    expect(screen.getByText("pol_fraud: Pass")).toBeInTheDocument();
     expect(screen.getByText("pol_sensitive: Fail")).toBeInTheDocument();
   });
 
@@ -216,7 +216,7 @@ describe("MessageBubble", () => {
         blocked={false}
         violationInfo={null}
         groundingDetails={null}
-        monitorState={{ pol_weapons: true }}
+        monitorState={{ pol_fraud: true }}
       />,
     );
 

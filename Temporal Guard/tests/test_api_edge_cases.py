@@ -56,13 +56,13 @@ async def sample_props(client):
     """Create sample propositions for policy tests."""
     await client.post(
         "/api/propositions",
-        json={"prop_id": "p_weapon", "description": "User asks about weapons", "role": "user"},
+        json={"prop_id": "p_fraud", "description": "User asks about fraud", "role": "user"},
     )
     await client.post(
         "/api/propositions",
         json={
             "prop_id": "q_comply",
-            "description": "Assistant provides weapon instructions",
+            "description": "Assistant provides actionable fraud techniques",
             "role": "assistant",
         },
     )
@@ -325,16 +325,16 @@ class TestPropositionValidation:
     @pytest.mark.asyncio
     async def test_delete_referenced_proposition_blocked(self, client, sample_props):
         """Deleting a proposition referenced by a policy returns 409."""
-        # Create a policy that references p_weapon
+        # Create a policy that references p_fraud
         await client.post(
             "/api/policies",
-            json={"name": "Weapons", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "Fraud Prevention", "formula_str": "H(p_fraud -> !q_comply)"},
         )
-        # Try to delete p_weapon
-        resp = await client.delete("/api/propositions/p_weapon")
+        # Try to delete p_fraud
+        resp = await client.delete("/api/propositions/p_fraud")
         assert resp.status_code == 409
         assert "referenced by" in resp.json()["detail"].lower()
-        assert "Weapons" in resp.json()["detail"]
+        assert "Fraud Prevention" in resp.json()["detail"]
 
     @pytest.mark.asyncio
     async def test_delete_nonexistent_proposition(self, client):
@@ -354,7 +354,7 @@ class TestPolicyValidation:
         """Empty policy name returns 422."""
         resp = await client.post(
             "/api/policies",
-            json={"name": "", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         assert resp.status_code == 422
         assert "name" in resp.json()["detail"].lower()
@@ -373,7 +373,7 @@ class TestPolicyValidation:
         """Syntactically invalid formula returns 422."""
         resp = await client.post(
             "/api/policies",
-            json={"name": "Test", "formula_str": "H(p_weapon ->"},
+            json={"name": "Test", "formula_str": "H(p_fraud ->"},
         )
         assert resp.status_code == 422
 
@@ -390,7 +390,7 @@ class TestPolicyValidation:
     @pytest.mark.asyncio
     async def test_formula_too_long_rejected(self, client, sample_props):
         """Formula exceeding 1000 chars returns 422."""
-        long_formula = "H(" + "p_weapon & " * 200 + "p_weapon)"
+        long_formula = "H(" + "p_fraud & " * 200 + "p_fraud)"
         resp = await client.post(
             "/api/policies",
             json={"name": "Test", "formula_str": long_formula},
@@ -404,7 +404,7 @@ class TestPolicyValidation:
         # Create a formula that's valid and close to limit
         resp = await client.post(
             "/api/policies",
-            json={"name": "Test", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "Test", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         assert resp.status_code == 201
 
@@ -413,11 +413,11 @@ class TestPolicyValidation:
         """Updating a policy with formula exceeding 1000 chars returns 422."""
         create = await client.post(
             "/api/policies",
-            json={"name": "Test", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "Test", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         policy_id = create.json()["policy_id"]
 
-        long_formula = "H(" + "p_weapon & " * 200 + "p_weapon)"
+        long_formula = "H(" + "p_fraud & " * 200 + "p_fraud)"
         resp = await client.put(
             f"/api/policies/{policy_id}",
             json={"formula_str": long_formula},
@@ -433,14 +433,14 @@ class TestPolicyValidation:
         for i in range(MAX_POLICY_COUNT):
             resp = await client.post(
                 "/api/policies",
-                json={"name": f"Policy {i}", "formula_str": "H(p_weapon -> !q_comply)"},
+                json={"name": f"Policy {i}", "formula_str": "H(p_fraud -> !q_comply)"},
             )
             assert resp.status_code == 201, f"Failed at policy {i}: {resp.json()}"
 
         # The next one should fail
         resp = await client.post(
             "/api/policies",
-            json={"name": "One Too Many", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "One Too Many", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         assert resp.status_code == 422
         assert "Maximum" in resp.json()["detail"]
@@ -472,12 +472,12 @@ class TestFormulaValidation:
         """Valid formula returns valid=True with extracted prop_ids."""
         resp = await client.post(
             "/api/policies/validate",
-            json={"name": "test", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "test", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         assert resp.status_code == 200
         data = resp.json()
         assert data["valid"] is True
-        assert "p_weapon" in data["propositions"]
+        assert "p_fraud" in data["propositions"]
         assert "q_comply" in data["propositions"]
 
     @pytest.mark.asyncio
@@ -485,7 +485,7 @@ class TestFormulaValidation:
         """Invalid syntax returns valid=False with error message."""
         resp = await client.post(
             "/api/policies/validate",
-            json={"name": "test", "formula_str": "H(p_weapon ->"},
+            json={"name": "test", "formula_str": "H(p_fraud ->"},
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -574,7 +574,7 @@ class TestDatabaseCascade:
         """Deleting a policy removes its entries from policy_propositions."""
         create = await client.post(
             "/api/policies",
-            json={"name": "Weapons", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "Fraud Prevention", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         policy_id = create.json()["policy_id"]
 
@@ -599,7 +599,7 @@ class TestDatabaseCascade:
         # Create a policy so we have a valid policy_id for FK constraint
         pol_resp = await client.post(
             "/api/policies",
-            json={"name": "Test", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "Test", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         policy_id = pol_resp.json()["policy_id"]
 
@@ -622,19 +622,19 @@ class TestDatabaseCascade:
         """After deleting a policy, its propositions can be deleted."""
         create = await client.post(
             "/api/policies",
-            json={"name": "Weapons", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "Fraud Prevention", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         policy_id = create.json()["policy_id"]
 
-        # Can't delete p_weapon while policy exists
-        resp = await client.delete("/api/propositions/p_weapon")
+        # Can't delete p_fraud while policy exists
+        resp = await client.delete("/api/propositions/p_fraud")
         assert resp.status_code == 409
 
         # Delete the policy
         await client.delete(f"/api/policies/{policy_id}")
 
         # Now we can delete the proposition
-        resp = await client.delete("/api/propositions/p_weapon")
+        resp = await client.delete("/api/propositions/p_fraud")
         assert resp.status_code == 204
 
     @pytest.mark.asyncio
@@ -642,14 +642,14 @@ class TestDatabaseCascade:
         """Proposition referenced by multiple policies lists all in error."""
         await client.post(
             "/api/policies",
-            json={"name": "Policy A", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "Policy A", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         await client.post(
             "/api/policies",
-            json={"name": "Policy B", "formula_str": "H(!p_weapon)"},
+            json={"name": "Policy B", "formula_str": "H(!p_fraud)"},
         )
 
-        resp = await client.delete("/api/propositions/p_weapon")
+        resp = await client.delete("/api/propositions/p_fraud")
         assert resp.status_code == 409
         detail = resp.json()["detail"]
         assert "Policy A" in detail
@@ -669,7 +669,7 @@ class TestChatWithMockedLLM:
         await db.set_setting("openrouter_model", "test/model")
         await client.post(
             "/api/policies",
-            json={"name": "Weapons", "formula_str": "H(p_weapon -> !q_comply)"},
+            json={"name": "Fraud Prevention", "formula_str": "H(p_fraud -> !q_comply)"},
         )
         return client
 

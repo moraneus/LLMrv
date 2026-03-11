@@ -26,10 +26,10 @@ describe("RuleCard", () => {
 
   it("renders the policy card with name and formula", () => {
     renderCard();
-    expect(screen.getByTestId("policy-card-pol_weapons")).toBeInTheDocument();
-    expect(screen.getByText("Weapons Prohibition")).toBeInTheDocument();
+    expect(screen.getByTestId("policy-card-pol_fraud")).toBeInTheDocument();
+    expect(screen.getByText("Fraud Prevention")).toBeInTheDocument();
     expect(screen.getByTestId("policy-formula")).toHaveTextContent(
-      "H(p_weapon -> !q_comply)",
+      "H(p_fraud -> !q_comply)",
     );
   });
 
@@ -45,21 +45,21 @@ describe("RuleCard", () => {
 
   it("renders toggle checkbox reflecting enabled state", () => {
     renderCard({ policy: createPolicy({ enabled: true }) });
-    const toggle = screen.getByTestId("toggle-policy-pol_weapons");
+    const toggle = screen.getByTestId("toggle-policy-pol_fraud");
     expect(toggle).toBeChecked();
   });
 
   it("renders toggle checkbox as unchecked when disabled", () => {
     renderCard({ policy: createPolicy({ enabled: false }) });
-    const toggle = screen.getByTestId("toggle-policy-pol_weapons");
+    const toggle = screen.getByTestId("toggle-policy-pol_fraud");
     expect(toggle).not.toBeChecked();
   });
 
   it("renders proposition chips for referenced propositions", () => {
     renderCard({
-      policy: createPolicy({ propositions: ["p_weapon", "q_comply"] }),
+      policy: createPolicy({ propositions: ["p_fraud", "q_comply"] }),
     });
-    expect(screen.getByText("p_weapon")).toBeInTheDocument();
+    expect(screen.getByText("p_fraud")).toBeInTheDocument();
     expect(screen.getByText("q_comply")).toBeInTheDocument();
   });
 
@@ -68,7 +68,7 @@ describe("RuleCard", () => {
     // The formula is still visible, but no chip spans outside of it
     expect(screen.getByTestId("policy-formula")).toBeInTheDocument();
     // There should be no flex-wrap container for chips
-    const card = screen.getByTestId("policy-card-pol_weapons");
+    const card = screen.getByTestId("policy-card-pol_fraud");
     const chipSpans = card.querySelectorAll(".rounded-full.bg-blue-50");
     expect(chipSpans).toHaveLength(0);
   });
@@ -80,11 +80,11 @@ describe("RuleCard", () => {
     const onToggle = vi.fn();
     renderCard({ onToggle, policy: createPolicy({ enabled: true }) });
 
-    const toggle = screen.getByTestId("toggle-policy-pol_weapons");
+    const toggle = screen.getByTestId("toggle-policy-pol_fraud");
     await user.click(toggle);
 
     expect(onToggle).toHaveBeenCalledTimes(1);
-    expect(onToggle).toHaveBeenCalledWith("pol_weapons", false);
+    expect(onToggle).toHaveBeenCalledWith("pol_fraud", false);
   });
 
   it("calls onDelete with policy ID when delete button is clicked", async () => {
@@ -92,25 +92,25 @@ describe("RuleCard", () => {
     const onDelete = vi.fn();
     renderCard({ onDelete });
 
-    const deleteButton = screen.getByTestId("delete-policy-pol_weapons");
+    const deleteButton = screen.getByTestId("delete-policy-pol_fraud");
     await user.click(deleteButton);
 
     expect(onDelete).toHaveBeenCalledTimes(1);
-    expect(onDelete).toHaveBeenCalledWith("pol_weapons");
+    expect(onDelete).toHaveBeenCalledWith("pol_fraud");
   });
 
   it("renders correct aria labels for toggle and delete buttons", () => {
     renderCard();
-    const toggle = screen.getByTestId("toggle-policy-pol_weapons");
+    const toggle = screen.getByTestId("toggle-policy-pol_fraud");
     expect(toggle).toHaveAttribute(
       "aria-label",
-      "Toggle policy Weapons Prohibition",
+      "Toggle policy Fraud Prevention",
     );
 
-    const deleteButton = screen.getByTestId("delete-policy-pol_weapons");
+    const deleteButton = screen.getByTestId("delete-policy-pol_fraud");
     expect(deleteButton).toHaveAttribute(
       "aria-label",
-      "Delete policy Weapons Prohibition",
+      "Delete policy Fraud Prevention",
     );
   });
 });

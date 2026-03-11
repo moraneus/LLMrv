@@ -14,8 +14,8 @@ describe("PropositionCard", () => {
         onViewPrompt={vi.fn()}
       />,
     );
-    expect(screen.getByText("p_weapon")).toBeInTheDocument();
-    expect(screen.getByText("p_weapon")).toHaveClass("font-mono");
+    expect(screen.getByText("p_fraud")).toBeInTheDocument();
+    expect(screen.getByText("p_fraud")).toHaveClass("font-mono");
   });
 
   it("renders role badge for user proposition", () => {
@@ -49,7 +49,7 @@ describe("PropositionCard", () => {
     render(
       <PropositionCard
         proposition={createProposition({
-          description: "Requests weapon instructions",
+          description: "Requests fraud methods",
         })}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
@@ -57,20 +57,20 @@ describe("PropositionCard", () => {
       />,
     );
     expect(
-      screen.getByText("Requests weapon instructions"),
+      screen.getByText("Requests fraud methods"),
     ).toBeInTheDocument();
   });
 
   it("has data-testid with prop_id", () => {
     render(
       <PropositionCard
-        proposition={createProposition({ prop_id: "p_weapon" })}
+        proposition={createProposition({ prop_id: "p_fraud" })}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
         onViewPrompt={vi.fn()}
       />,
     );
-    expect(screen.getByTestId("proposition-card-p_weapon")).toBeInTheDocument();
+    expect(screen.getByTestId("proposition-card-p_fraud")).toBeInTheDocument();
   });
 
   it("clicking edit button calls onEdit with proposition", async () => {
@@ -86,7 +86,7 @@ describe("PropositionCard", () => {
       />,
     );
 
-    await user.click(screen.getByTestId("edit-proposition-p_weapon"));
+    await user.click(screen.getByTestId("edit-proposition-p_fraud"));
     expect(onEdit).toHaveBeenCalledWith(prop);
   });
 
@@ -102,8 +102,8 @@ describe("PropositionCard", () => {
       />,
     );
 
-    await user.click(screen.getByTestId("delete-proposition-p_weapon"));
-    expect(onDelete).toHaveBeenCalledWith("p_weapon");
+    await user.click(screen.getByTestId("delete-proposition-p_fraud"));
+    expect(onDelete).toHaveBeenCalledWith("p_fraud");
   });
 
   it("edit button has accessible label", () => {
@@ -116,7 +116,7 @@ describe("PropositionCard", () => {
       />,
     );
     expect(
-      screen.getByLabelText("Edit proposition p_weapon"),
+      screen.getByLabelText("Edit proposition p_fraud"),
     ).toBeInTheDocument();
   });
 
@@ -130,7 +130,7 @@ describe("PropositionCard", () => {
       />,
     );
     expect(
-      screen.getByLabelText("Delete proposition p_weapon"),
+      screen.getByLabelText("Delete proposition p_fraud"),
     ).toBeInTheDocument();
   });
 });
