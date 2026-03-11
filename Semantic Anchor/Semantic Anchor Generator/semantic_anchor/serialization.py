@@ -676,10 +676,11 @@ def _nli_net_scores(pairs):
     """
     Compute net NLI score = E - C (entailment minus contradiction) for each pair.
     Returns list of signed scores: positive = entailment, negative = contradiction.
+    Uses batching to avoid GPU OOM on MPS/CUDA devices.
     """
     import numpy as np
     xenc = _load_cross_encoder()
-    logits = xenc.predict(pairs, apply_softmax=False)
+    logits = xenc.predict(pairs, apply_softmax=False, batch_size=16)
     logits = np.array(logits)
     if logits.ndim == 1:
         logits = logits.reshape(1, -1)
@@ -688,6 +689,15 @@ def _nli_net_scores(pairs):
     entail = probs[:, _entailment_idx]
     contra = probs[:, _contradiction_idx]
     net = entail - contra
+    # Release GPU memory after inference
+    try:
+        import torch
+        if hasattr(torch, 'mps') and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+        elif torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
     return net.tolist()
 
 
