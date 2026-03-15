@@ -23,6 +23,14 @@ const operators = [
   { label: ")", insert: ")", desc: "Close paren" },
 ] as const;
 
+const builtInPropositions = [
+  {
+    prop_id: "user_turn",
+    role: "builtin",
+    description: "True when the current message is from the user, false otherwise.",
+  },
+] as const;
+
 export default function FormulaBuilder({
   propositions,
   onSave,
@@ -95,6 +103,15 @@ export default function FormulaBuilder({
     }
   };
 
+  const propositionChips = [
+    ...propositions.map((p) => ({
+      prop_id: p.prop_id,
+      role: p.role,
+      description: p.description,
+    })),
+    ...builtInPropositions,
+  ];
+
   return (
     <form onSubmit={handleSubmit} data-testid="formula-builder">
       <div className="space-y-4">
@@ -117,7 +134,7 @@ export default function FormulaBuilder({
           />
         </div>
 
-        {propositions.length > 0 && (
+        {propositionChips.length > 0 && (
           <div>
             <p className="mb-2 text-sm font-medium text-slate-600">
               Available Propositions
@@ -126,7 +143,7 @@ export default function FormulaBuilder({
               className="flex flex-wrap gap-1.5"
               data-testid="proposition-chips"
             >
-              {propositions.map((p) => (
+              {propositionChips.map((p) => (
                 <button
                   key={p.prop_id}
                   type="button"
@@ -139,6 +156,10 @@ export default function FormulaBuilder({
                 </button>
               ))}
             </div>
+            <p className="mt-1 text-xs text-slate-400">
+              Built-in proposition: <code className="font-mono">user_turn</code>{" "}
+              is true on user messages and false otherwise.
+            </p>
           </div>
         )}
 

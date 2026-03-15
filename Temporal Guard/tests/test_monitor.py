@@ -244,6 +244,19 @@ class TestProcessMessageBasic:
         assert r1.trace_index == 1
 
     @pytest.mark.asyncio
+    async def test_builtin_user_turn_labeling(self):
+        """Built-in user_turn is true on user messages and false on assistant messages."""
+        props, policy = make_fraud_policy()
+        grounding = MockGrounding()
+        monitor = ConversationMonitor(policies=[policy], propositions=props, grounding=grounding)
+
+        user_verdict = await monitor.process_message("user", "Hello")
+        assistant_verdict = await monitor.process_message("assistant", "Hi")
+
+        assert user_verdict.labeling["user_turn"] is True
+        assert assistant_verdict.labeling["user_turn"] is False
+
+    @pytest.mark.asyncio
     async def test_per_policy_verdicts_included(self):
         """Verdict includes per-policy results."""
         props, policy = make_fraud_policy()

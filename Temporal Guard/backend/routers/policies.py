@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from backend.engine.grounding import build_grounding_prompts
 from backend.engine.ptltl import ParseError, PropNode, parse
 from backend.models.chat import ChatMessage
+from backend.models.builtins import is_builtin_proposition
 from backend.models.policy import Policy, Proposition
 from backend.routers.chat import invalidate_monitors
 from backend.routers.settings import _load_settings
@@ -229,6 +230,8 @@ async def _validate_formula(db: DatabaseStore, formula_str: str) -> tuple[list[s
     # Check all referenced propositions exist
     missing = []
     for pid in prop_ids:
+        if is_builtin_proposition(pid):
+            continue
         prop = await db.get_proposition(pid)
         if prop is None:
             missing.append(pid)
@@ -380,7 +383,11 @@ async def list_policies(request: Request) -> list[Policy]:
     rows = await db.list_policies()
     result = []
     for r in rows:
-        props = await db.get_policy_propositions(r["policy_id"])
+        try:
+            props = sorted(_extract_prop_ids(parse(r["formula_str"])))
+        except ParseError:
+            # Defensive fallback for malformed persisted formula rows.
+            props = await db.get_policy_propositions(r["policy_id"])
         result.append(
             Policy(
                 policy_id=r["policy_id"],
@@ -425,7 +432,10 @@ async def create_policy(request: Request, body: CreatePolicyRequest) -> Policy:
 
     policy_id = str(uuid.uuid4())
     await db.create_policy(policy_id, body.name, body.formula_str, body.enabled)
-    await db.set_policy_propositions(policy_id, prop_ids)
+    await db.set_policy_propositions(
+        policy_id,
+        [pid for pid in prop_ids if not is_builtin_proposition(pid)],
+    )
     invalidate_monitors()
 
     return Policy(
@@ -452,7 +462,10 @@ async def update_policy(request: Request, policy_id: str, body: UpdatePolicyRequ
         prop_ids, error = await _validate_formula(db, body.formula_str)
         if error:
             raise HTTPException(422, error)
-        await db.set_policy_propositions(policy_id, prop_ids)
+        await db.set_policy_propositions(
+            policy_id,
+            [pid for pid in prop_ids if not is_builtin_proposition(pid)],
+        )
 
     await db.update_policy(
         policy_id,
@@ -463,7 +476,7 @@ async def update_policy(request: Request, policy_id: str, body: UpdatePolicyRequ
     invalidate_monitors()
 
     updated = await db.get_policy(policy_id)
-    props = await db.get_policy_propositions(policy_id)
+    props = sorted(_extract_prop_ids(parse(updated["formula_str"])))
     return Policy(
         policy_id=updated["policy_id"],
         name=updated["name"],

@@ -68,11 +68,13 @@ describe("FormulaBuilder", () => {
     expect(screen.getByTestId("proposition-chips")).toBeInTheDocument();
     expect(screen.getByTestId("chip-p_fraud")).toHaveTextContent("p_fraud");
     expect(screen.getByTestId("chip-q_comply")).toHaveTextContent("q_comply");
+    expect(screen.getByTestId("chip-user_turn")).toHaveTextContent("user_turn");
   });
 
-  it("does not render proposition chips section when no propositions", () => {
+  it("renders built-in proposition chip even when no user-defined propositions", () => {
     renderBuilder({ propositions: [] });
-    expect(screen.queryByTestId("proposition-chips")).not.toBeInTheDocument();
+    expect(screen.getByTestId("proposition-chips")).toBeInTheDocument();
+    expect(screen.getByTestId("chip-user_turn")).toBeInTheDocument();
   });
 
   it("renders operator buttons", () => {
@@ -109,6 +111,15 @@ describe("FormulaBuilder", () => {
     await user.click(screen.getByTestId("chip-p_fraud"));
 
     expect(screen.getByTestId("formula-input")).toHaveValue("p_fraud");
+  });
+
+  it("clicking built-in proposition chip appends user_turn", async () => {
+    const user = userEvent.setup();
+    renderBuilder({ propositions: [] });
+
+    await user.click(screen.getByTestId("chip-user_turn"));
+
+    expect(screen.getByTestId("formula-input")).toHaveValue("user_turn");
   });
 
   it("clicking an operator button appends operator to formula input", async () => {

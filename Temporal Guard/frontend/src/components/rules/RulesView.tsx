@@ -159,8 +159,7 @@ export default function RulesView() {
           <h2 className="text-xl font-semibold text-slate-800">Policies</h2>
           <button
             onClick={() => setShowFormulaBuilder(true)}
-            disabled={propsList.length === 0}
-            className="flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600"
             aria-label="Add policy"
             data-testid="add-policy"
           >
@@ -179,7 +178,7 @@ export default function RulesView() {
           <p className="text-sm text-slate-400" data-testid="no-policies">
             No policies defined yet.{" "}
             {propsList.length === 0
-              ? "Create propositions first, then add policies."
+              ? 'You can still click "Add" and use the built-in proposition user_turn.'
               : 'Click "Add" to create one.'}
           </p>
         )}

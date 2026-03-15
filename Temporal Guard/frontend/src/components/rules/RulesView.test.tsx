@@ -119,9 +119,9 @@ describe("RulesView", () => {
     expect(screen.getByTestId("add-policy")).toBeInTheDocument();
   });
 
-  it("Add policy button is disabled when no propositions exist", () => {
+  it("Add policy button is enabled even when no propositions exist", () => {
     render(<RulesView />);
-    expect(screen.getByTestId("add-policy")).toBeDisabled();
+    expect(screen.getByTestId("add-policy")).not.toBeDisabled();
   });
 
   it("Add policy button is enabled when propositions exist", () => {

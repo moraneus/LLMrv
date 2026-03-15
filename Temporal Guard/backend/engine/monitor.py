@@ -14,6 +14,7 @@ import uuid
 from backend.engine.grounding import GroundingMethod, GroundingResult
 from backend.engine.ptltl import PtLTLMonitor, parse
 from backend.engine.trace import ConversationTrace
+from backend.models.builtins import BUILTIN_USER_TURN
 from backend.models.policy import MonitorVerdict, Policy, Proposition, ViolationInfo
 
 
@@ -80,6 +81,9 @@ class ConversationMonitor:
             for prop, result in zip(relevant_props, results, strict=True):
                 labeling[prop.prop_id] = result.match
                 grounding_details.append(result.to_dict())
+
+        # Built-in propositions are always available in formulas.
+        labeling[BUILTIN_USER_TURN] = role == "user"
 
         # 4. Non-matching role propositions default to False.
         # Cross-role temporal relationships are expressed via ptLTL operators
