@@ -109,3 +109,47 @@ policies:
         assert isinstance(session, Session)
     finally:
         Path(tmp_path).unlink()
+
+
+# ---------------------------------------------------------------------------
+# Auto-generation of few-shot examples
+# ---------------------------------------------------------------------------
+
+
+def test_auto_generate_skipped_for_non_llm_grounding(props, policies, grounding):
+    """StaticGrounding has no _call_llm — auto-generation should be silently skipped."""
+    guard = TemporalGuard(propositions=props, policies=policies, grounding=grounding)
+    # Propositions should remain without few-shot examples
+    assert guard._propositions[0].few_shot_positive == []
+    assert guard._propositions[0].few_shot_negative == []
+
+
+def test_auto_generate_disabled(props, policies, grounding):
+    """With auto_generate_few_shots=False, no generation should happen."""
+    guard = TemporalGuard(
+        propositions=props, policies=policies, grounding=grounding,
+        auto_generate_few_shots=False,
+    )
+    assert guard._propositions[0].few_shot_positive == []
+
+
+def test_auto_generate_skips_when_examples_provided(policies, grounding):
+    """Propositions with existing few-shot examples are left untouched."""
+    props = [
+        Proposition("p1", "user", "desc",
+                    few_shot_positive=["my example"],
+                    few_shot_negative=["my neg"]),
+    ]
+    guard = TemporalGuard(propositions=props, policies=policies, grounding=grounding)
+    assert guard._propositions[0].few_shot_positive == ["my example"]
+    assert guard._propositions[0].few_shot_negative == ["my neg"]
+
+
+def test_generate_few_shots_raises_for_non_llm_grounding(props, policies, grounding):
+    """Explicit generate_few_shots() raises TypeError for non-LLM grounding."""
+    guard = TemporalGuard(
+        propositions=props, policies=policies, grounding=grounding,
+        auto_generate_few_shots=False,
+    )
+    with pytest.raises(TypeError, match="requires LLMGrounding"):
+        guard.generate_few_shots()

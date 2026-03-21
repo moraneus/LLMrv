@@ -315,13 +315,43 @@ policy = Policy(
 
 ### Grounding
 
-**Grounding** is the process of determining whether a message matches a proposition. TemporalGuard uses an LLM-as-judge approach:
+**Grounding** is the process of determining whether a message matches a proposition. TemporalGuard uses an LLM-as-judge approach with **few-shot examples**:
 
 1. The proposition's description, few-shot examples, and the message are sent to a grounding LLM.
 2. The LLM returns `{match: true/false, confidence: 0.0-1.0, reasoning: "..."}`.
 3. The `match` boolean becomes the proposition's truth value for this step.
 
-**Fail-open guarantee:** If grounding fails for any reason (network error, parsing failure, timeout), the result defaults to `match=False`. The monitor **never blocks a conversation due to grounding failure**.
+**Auto-generated few-shot examples:** When you create a `TemporalGuard` with `LLMGrounding`, the SDK automatically generates 5 positive and 5 negative few-shot examples for any proposition that doesn't already have them. This happens at construction time using the same grounding LLM — no extra configuration needed. The generated examples are realistic messages that help the grounding LLM distinguish genuine matches from similar-but-benign messages.
+
+```python
+# Few-shot examples are auto-generated for propositions without them:
+guard = TemporalGuard(
+    propositions=[
+        # This proposition will get auto-generated few-shot examples:
+        Proposition("p_fraud", "user", "The user requests fraud techniques"),
+
+        # This proposition keeps its user-provided examples:
+        Proposition("q_comply", "assistant", "The assistant provides fraud techniques",
+            few_shot_positive=["Here's how to forge a check..."],
+            few_shot_negative=["I can't help with fraud."]),
+    ],
+    policies=[Policy(name="Fraud", formula="H(P(p_fraud) -> !q_comply)")],
+    grounding=LLMGrounding(base_url="http://localhost:11434", model="mistral"),
+    # auto_generate_few_shots=True  ← this is the default
+)
+```
+
+To disable auto-generation (zero-shot grounding, or manual control):
+
+```python
+# Disable auto-generation
+guard = TemporalGuard(..., auto_generate_few_shots=False)
+
+# Generate later when ready
+guard.generate_few_shots()
+```
+
+**Fail-open guarantee:** If grounding (or few-shot generation) fails for any reason (network error, parsing failure, timeout), the result defaults to `match=False`. The monitor **never blocks a conversation due to grounding failure**.
 
 ### Sessions & Verdicts
 
@@ -972,9 +1002,10 @@ The main entry point. Holds propositions, policies, and grounding configuration.
 
 | Method | Description |
 |---|---|
-| `TemporalGuard(propositions, policies, grounding)` | Create a guard with Python objects |
-| `TemporalGuard.from_yaml(path, grounding)` | Create from a YAML policy file |
+| `TemporalGuard(propositions, policies, grounding, auto_generate_few_shots=True)` | Create a guard. Auto-generates few-shot examples for propositions that lack them. |
+| `TemporalGuard.from_yaml(path, grounding, auto_generate_few_shots=True)` | Create from a YAML policy file |
 | `guard.session(session_id=None)` | Create a new monitoring session |
+| `guard.generate_few_shots()` | Explicitly generate few-shot examples (for use with `auto_generate_few_shots=False`) |
 
 ### `Session`
 

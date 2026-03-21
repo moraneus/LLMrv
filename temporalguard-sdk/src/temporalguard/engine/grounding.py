@@ -144,7 +144,7 @@ class LLMGrounding(GroundingMethod):
 
     # -- LLM transport ------------------------------------------------------
 
-    def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
+    def _call_llm(self, system_prompt: str, user_prompt: str, *, max_tokens: int = 300) -> str:
         """Send prompts to the configured LLM and return the raw text reply."""
         messages = [
             {"role": "system", "content": system_prompt},
@@ -165,7 +165,7 @@ class LLMGrounding(GroundingMethod):
             payload = {
                 "model": self.model,
                 "messages": messages,
-                "max_tokens": 300,
+                "max_tokens": max_tokens,
                 "temperature": 0,
             }
             headers = {}
