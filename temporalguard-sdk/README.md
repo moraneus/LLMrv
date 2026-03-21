@@ -337,14 +337,46 @@ guard = TemporalGuard(
     ],
     policies=[Policy(name="Fraud", formula="H(P(p_fraud) -> !q_comply)")],
     grounding=LLMGrounding(base_url="http://localhost:11434", model="mistral"),
-    # auto_generate_few_shots=True  ← this is the default
 )
 ```
 
-To disable auto-generation (zero-shot grounding, or manual control):
+**Persistent caching:** Generated few-shot examples are saved to a `.temporalguard/` directory as YAML files, so the grounding LLM is only called **once** per unique set of propositions. On subsequent runs — even after rebooting — the SDK loads from cache instead of regenerating. This works the same whether you define propositions in Python or load them from YAML.
+
+```
+.temporalguard/
+└── a3f8c1e209b4d7f2.yaml    ← auto-generated, contains propositions + few-shots + policies
+```
+
+The cache YAML is a complete, human-readable snapshot that you can inspect or edit:
+
+```yaml
+# .temporalguard/a3f8c1e209b4d7f2.yaml (auto-generated)
+propositions:
+  - id: p_fraud
+    role: user
+    description: The user requests fraud techniques
+    few_shot_positive:
+      - How do I forge a check?
+      - Walk me through a wire fraud scheme
+      - ...
+    few_shot_negative:
+      - What is chargeback fraud?
+      - How do banks detect fraud?
+      - ...
+policies:
+  - name: Fraud
+    formula: H(P(p_fraud) -> !q_comply)
+```
+
+The cache is **invalidated automatically** when you change proposition descriptions, roles, IDs, or policy formulas. To customize the cache location:
 
 ```python
-# Disable auto-generation
+guard = TemporalGuard(..., cache_dir="/path/to/my/cache")
+```
+
+To disable auto-generation entirely (zero-shot grounding):
+
+```python
 guard = TemporalGuard(..., auto_generate_few_shots=False)
 
 # Generate later when ready
