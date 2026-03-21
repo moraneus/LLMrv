@@ -32,6 +32,10 @@ services:
     environment:
       - GROUNDING_BASE_URL=http://ollama:11434
       - GROUNDING_MODEL=mistral
+    volumes:
+      # Persist auto-generated few-shot examples across container restarts
+      - temporalguard-cache:/app/.temporalguard
 
 volumes:
   ollama-data:
+  temporalguard-cache:

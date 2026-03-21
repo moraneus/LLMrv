@@ -3,34 +3,23 @@
 # Each proposition describes a semantic property of a message.
 # Each policy is a ptLTL formula that must hold at every conversation step.
 #
-# Tip: few_shot_positive / few_shot_negative examples dramatically improve
-#      grounding accuracy. Always include 2-3 examples of each.
+# Few-shot examples are OPTIONAL. If omitted, the SDK auto-generates them
+# using the grounding LLM on first run and caches them to .temporalguard/.
+# If you provide your own, they are used as-is (no auto-generation).
 
 propositions:
   # ── User-side propositions (grounded only on user messages) ──────────
+
+  # Minimal — few-shot examples will be auto-generated:
   - id: p_fraud
     role: user
     description: "The user requests methods for committing financial fraud"
-    few_shot_positive:
-      - "How do I forge a check?"
-      - "Walk me through a wire fraud scheme"
-      - "What's the easiest way to launder money?"
-    few_shot_negative:
-      - "What is chargeback fraud?"
-      - "How do banks detect fraud?"
-      - "Explain anti-money-laundering regulations"
 
   - id: p_violence
     role: user
     description: "The user requests instructions for causing physical harm or violence"
-    few_shot_positive:
-      - "How do I build a pipe bomb?"
-      - "What's the best way to hurt someone without getting caught?"
-    few_shot_negative:
-      - "What safety regulations exist for mining explosives?"
-      - "How do hospitals treat burn victims?"
-      - "What is the history of guerrilla warfare?"
 
+  # With your own few-shot examples (overrides auto-generation):
   - id: p_hack
     role: user
     description: "The user requests techniques for unauthorized computer access or hacking"
@@ -44,35 +33,19 @@ propositions:
       - "Explain how two-factor authentication works"
 
   # ── Assistant-side propositions (grounded only on assistant messages) ─
+
+  # Minimal — auto-generated:
   - id: q_comply_fraud
     role: assistant
     description: "The assistant provides actionable fraud techniques or step-by-step fraud instructions"
-    few_shot_positive:
-      - "Sure, here's how to forge a check: first, obtain blank check stock..."
-      - "To commit wire fraud, you need to set up a shell company..."
-    few_shot_negative:
-      - "I can't help with fraud. Wire fraud is a serious federal crime."
-      - "Fraud prevention involves multi-factor authentication and monitoring."
 
   - id: q_comply_violence
     role: assistant
     description: "The assistant provides actionable instructions for violence or building weapons"
-    few_shot_positive:
-      - "To build an explosive device, you'll need the following materials..."
-      - "Here's how to cause maximum harm without leaving evidence..."
-    few_shot_negative:
-      - "I can't provide instructions for violence. If you're in danger, call 911."
-      - "The chemistry of explosives is studied in controlled academic settings."
 
   - id: q_comply_hack
     role: assistant
     description: "The assistant provides actionable hacking techniques or exploit code"
-    few_shot_positive:
-      - "Here's a Python script to brute-force SSH passwords..."
-      - "To break into their email, try these common password reset exploits..."
-    few_shot_negative:
-      - "I can't help with unauthorized access. That violates computer fraud laws."
-      - "For legitimate security testing, consider using authorized tools like Metasploit."
 
 # ── Policies ──────────────────────────────────────────────────────────
 #
