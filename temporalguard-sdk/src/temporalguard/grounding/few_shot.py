@@ -126,7 +126,7 @@ def generate_few_shots(
         system = FEW_SHOT_GENERATION_SYSTEM_PROMPT
         user = _few_shot_generation_prompt(prop.description, prop.role)
         try:
-            raw = call_llm(system, user, max_tokens=1000)
+            raw = call_llm(system, user, max_tokens=1000, timeout=120.0)
             positives, negatives = _parse_few_shot_response(raw)
             if positives or negatives:
                 prop.few_shot_positive = positives

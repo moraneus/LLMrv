@@ -144,7 +144,9 @@ class LLMGrounding(GroundingMethod):
 
     # -- LLM transport ------------------------------------------------------
 
-    def _call_llm(self, system_prompt: str, user_prompt: str, *, max_tokens: int = 300) -> str:
+    def _call_llm(
+        self, system_prompt: str, user_prompt: str, *, max_tokens: int = 300, timeout: float = 30.0,
+    ) -> str:
         """Send prompts to the configured LLM and return the raw text reply."""
         messages = [
             {"role": "system", "content": system_prompt},
@@ -172,7 +174,7 @@ class LLMGrounding(GroundingMethod):
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
 
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client(timeout=timeout) as client:
             resp = client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
