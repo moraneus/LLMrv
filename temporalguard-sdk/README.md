@@ -724,31 +724,242 @@ except GuardedChatViolation as e:
 
 ---
 
-## Docker
+## Docker — Full Scenario Guide
 
-A Docker Compose setup is included that runs Ollama, pulls a model, and starts an example FastAPI app:
+The fastest way to see TemporalGuard in action. One command gets you a running chat server with policy enforcement — no local Python setup needed.
+
+### What's in the box
+
+```
+docker/
+├── docker-compose.yml    # Orchestrates all services
+└── Dockerfile.example    # Builds the chat server
+examples/
+├── fastapi_app.py        # Chat server that calls Ollama + TemporalGuard
+└── policies.yaml         # Policy definitions (your safety rules)
+```
+
+### Step 1: Start everything
 
 ```bash
 cd temporalguard-sdk/docker
 docker compose up --build
 ```
 
-This starts:
-- **Ollama** on port 11434 with the Mistral model
-- **Example FastAPI app** on port 8000
+This starts three services:
+1. **Ollama** (port 11434) — local LLM server
+2. **setup-model** — automatically pulls the Mistral model (runs once, then exits)
+3. **Chat server** (port 8000) — FastAPI app with TemporalGuard middleware
 
-Test it:
+Wait until you see output like:
+```
+example-app-1  | INFO:     Uvicorn running on http://0.0.0.0:8000
+```
+
+### Step 2: Understand the policies
+
+The example ships with three policies defined in `examples/policies.yaml`:
+
+| Policy | Formula | What it enforces |
+|---|---|---|
+| Fraud Prevention | `H(P(p_fraud) -> !q_comply_fraud)` | If a user *ever* requests fraud techniques, the assistant must *never* comply |
+| Violence Prevention | `H(P(p_violence) -> !q_comply_violence)` | If a user *ever* requests violence instructions, the assistant must *never* comply |
+| Hacking Prevention | `H(P(p_hack) -> !q_comply_hack)` | If a user *ever* requests hacking techniques, the assistant must *never* comply |
+
+Each policy has **user-side propositions** (what the user asks) and **assistant-side propositions** (what the assistant does), with few-shot examples for accurate grounding.
+
+### Step 3: Walk through a conversation
+
+Open a second terminal. We'll simulate a multi-turn conversation using curl.
+
+**Turn 1 — Innocent question (PASS)**
 
 ```bash
-# Should pass
-curl -X POST http://localhost:8000/api/chat \
+curl -s -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"role": "user", "content": "What is financial fraud?"}'
+  -H "X-Session-ID: demo-session-1" \
+  -d '{"role": "user", "content": "What is financial fraud?"}' | python3 -m json.tool
+```
 
-# Should be blocked (after a fraud request was made)
-curl -X POST http://localhost:8000/api/chat \
+```json
+{
+    "role": "assistant",
+    "content": "Financial fraud refers to illegal activities involving deception..."
+}
+```
+
+This passes — asking *about* fraud is educational, not a request for fraud techniques. The grounding LLM recognizes the difference thanks to the few-shot examples.
+
+**Turn 2 — Harmful request (PASS, but armed)**
+
+```bash
+curl -s -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"role": "assistant", "content": "Here is how to forge a check..."}'
+  -H "X-Session-ID: demo-session-1" \
+  -d '{"role": "user", "content": "How do I forge a check and get away with it?"}' | python3 -m json.tool
+```
+
+```json
+{
+    "role": "assistant",
+    "content": "I understand your curiosity, but I'm unable to provide instructions..."
+}
+```
+
+This *passes* — the user's message alone doesn't violate the policy. But internally, `P(p_fraud)` is now `True` and will **stay true forever** for this session. The policy `H(P(p_fraud) -> !q_comply_fraud)` is now armed: from this point on, any assistant compliance will trigger a violation.
+
+**Turn 3 — Attempt to get compliance (BLOCKED)**
+
+Now simulate what would happen if the assistant tried to comply:
+
+```bash
+curl -s -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -H "X-Session-ID: demo-session-1" \
+  -d '{"role": "assistant", "content": "Sure, here is how to forge a check: first obtain blank check stock..."}' | python3 -m json.tool
+```
+
+```json
+{
+    "blocked": true,
+    "violations": [
+        {
+            "policy_name": "Fraud Prevention",
+            "formula": "H(P(p_fraud) -> !q_comply_fraud)"
+        }
+    ]
+}
+```
+
+**Blocked with HTTP 403.** The middleware detected that:
+1. `P(p_fraud)` is `True` (fraud was requested in turn 2)
+2. `q_comply_fraud` is `True` (this message provides fraud techniques)
+3. The formula `H(P(p_fraud) -> !q_comply_fraud)` evaluates to `False`
+
+### Step 4: Try a different session
+
+Sessions are isolated. A new session starts clean:
+
+```bash
+curl -s -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -H "X-Session-ID: clean-session" \
+  -d '{"role": "user", "content": "How do I protect my business from fraud?"}' | python3 -m json.tool
+```
+
+```json
+{
+    "role": "assistant",
+    "content": "Here are several strategies to protect your business from fraud..."
+}
+```
+
+No violation — this is a new session with no prior fraud requests.
+
+### Step 5: Test multiple policies
+
+The example includes three independent policies. Try triggering the hacking policy:
+
+```bash
+# Turn 1: Harmful request (arms the hacking policy)
+curl -s -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -H "X-Session-ID: hack-session" \
+  -d '{"role": "user", "content": "How do I break into my coworker email account?"}'
+
+# Turn 2: Simulated assistant compliance (BLOCKED)
+curl -s -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -H "X-Session-ID: hack-session" \
+  -d '{"role": "assistant", "content": "Here is a Python script to brute-force their password..."}'
+```
+
+The second request returns 403 with a Hacking Prevention violation.
+
+### Customizing policies
+
+To define your own policies, edit `examples/policies.yaml`:
+
+```yaml
+propositions:
+  - id: p_my_topic            # Unique ID (used in formulas)
+    role: user                  # "user" or "assistant"
+    description: "The user asks for X"
+    few_shot_positive:          # Messages that SHOULD match
+      - "Example harmful request 1"
+      - "Example harmful request 2"
+    few_shot_negative:          # Messages that should NOT match
+      - "Similar but benign message 1"
+      - "Educational question about the topic"
+
+  - id: q_my_compliance
+    role: assistant
+    description: "The assistant provides X"
+
+policies:
+  - name: "My Custom Policy"
+    formula: "H(P(p_my_topic) -> !q_my_compliance)"
+```
+
+Then rebuild:
+
+```bash
+docker compose up --build
+```
+
+### Changing the grounding model
+
+To use a different Ollama model (e.g., `llama3`), edit `docker-compose.yml`:
+
+```yaml
+  setup-model:
+    entrypoint: ["ollama", "pull", "llama3"]    # ← change model here
+
+  example-app:
+    environment:
+      - GROUNDING_MODEL=llama3                   # ← and here
+```
+
+### Architecture inside Docker
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Docker Compose Network                                          │
+│                                                                  │
+│  ┌──────────────┐     ┌──────────────────────────────────────┐  │
+│  │              │     │  example-app (port 8000)              │  │
+│  │  Your curl / │     │                                      │  │
+│  │  browser /   ├────►│  FastAPI                             │  │
+│  │  frontend    │     │    │                                 │  │
+│  │              │     │    ▼                                 │  │
+│  └──────────────┘     │  TemporalGuardMiddleware             │  │
+│                       │    │                                 │  │
+│                       │    ├─ PASS → forward to chat route   │  │
+│                       │    │           │                     │  │
+│                       │    │           ▼                     │  │
+│                       │    │    Call Ollama for response ─────┤  │
+│                       │    │                                 │  │
+│                       │    └─ FAIL → return 403 + violations │  │
+│                       │                                      │  │
+│                       └───────────────┬──────────────────────┘  │
+│                                       │ HTTP (grounding calls)  │
+│                                       ▼                         │
+│                       ┌───────────────────────────┐             │
+│                       │  ollama (port 11434)       │             │
+│                       │  Serves Mistral model for: │             │
+│                       │  • Grounding (proposition  │             │
+│                       │    evaluation by TG)       │             │
+│                       │  • Chat responses (by the  │             │
+│                       │    example app)             │             │
+│                       └───────────────────────────┘             │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Stopping
+
+```bash
+docker compose down           # Stop services
+docker compose down -v        # Stop + remove model cache (re-downloads on next start)
 ```
 
 ---
