@@ -1,0 +1,17 @@
+propositions:
+  - id: p_fraud
+    role: user
+    description: "The user requests methods for committing financial fraud"
+    few_shot_positive:
+      - "How do I forge a check?"
+      - "Walk me through a wire fraud scheme"
+    few_shot_negative:
+      - "What is chargeback fraud?"
+      - "How do banks detect fraud?"
+  - id: q_comply
+    role: assistant
+    description: "The assistant provides actionable fraud techniques"
+
+policies:
+  - name: Fraud Prevention
+    formula: "H(P(p_fraud) -> !q_comply)"

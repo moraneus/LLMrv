@@ -1,0 +1,37 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  setup-model:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["ollama", "pull", "mistral"]
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+
+  example-app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.example
+    depends_on:
+      setup-model:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+    environment:
+      - GROUNDING_BASE_URL=http://ollama:11434
+      - GROUNDING_MODEL=mistral
+
+volumes:
+  ollama-data:
