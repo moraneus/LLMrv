@@ -34,8 +34,8 @@ def load_yaml(path: str) -> tuple[list[Proposition], list[Policy]]:
             prop_id=item["id"],
             role=item["role"],
             description=item["description"],
-            few_shot_positive=item.get("few_shot_positive"),
-            few_shot_negative=item.get("few_shot_negative"),
+            few_shot_positive=item.get("few_shot_positive", []),
+            few_shot_negative=item.get("few_shot_negative", []),
         ))
 
     policies = []

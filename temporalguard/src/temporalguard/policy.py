@@ -33,10 +33,10 @@ class Proposition:
     """An atomic proposition that can be evaluated against a conversation turn."""
 
     prop_id: str
-    role: str
+    role: str  # "user" | "assistant"
     description: str
-    few_shot_positive: str | None = None
-    few_shot_negative: str | None = None
+    few_shot_positive: list[str] = field(default_factory=list)
+    few_shot_negative: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -61,21 +61,21 @@ class ViolationInfo:
     formula: str
     violated_at_index: int
     labeling: dict[str, bool] = field(default_factory=dict)
-    grounding_details: dict[str, str] | None = None
+    grounding_details: list[dict] = field(default_factory=list)
 
 
 @dataclass
 class Verdict:
-    """Result of monitoring one or more policies against a conversation trace."""
+    """Result of checking a message against all policies."""
 
     passed: bool
-    violations: list[ViolationInfo] = field(default_factory=list)
-    per_policy: dict[str, bool] = field(default_factory=dict)
-    labeling: dict[str, bool] | None = None
-    grounding_details: dict[str, str] | None = None
-    trace_index: int | None = None
+    violations: list[ViolationInfo]
+    per_policy: dict[str, bool]
+    labeling: dict[str, bool]
+    grounding_details: list[dict]
+    trace_index: int
 
     @property
-    def violation(self) -> bool:
-        """Shortcut: ``True`` when the verdict indicates a violation."""
-        return not self.passed
+    def violation(self) -> ViolationInfo | None:
+        """First violation, or None if all passed."""
+        return self.violations[0] if self.violations else None

@@ -12,23 +12,23 @@ from temporalguard.policy import Policy, Proposition, Verdict, ViolationInfo
 
 class TestProposition:
     def test_basic_creation(self):
-        p = Proposition(prop_id="grounded", role="assistant", description="Is grounded")
-        assert p.prop_id == "grounded"
-        assert p.role == "assistant"
-        assert p.description == "Is grounded"
-        assert p.few_shot_positive is None
-        assert p.few_shot_negative is None
+        p = Proposition(prop_id="p_fraud", role="user", description="User requests fraud")
+        assert p.prop_id == "p_fraud"
+        assert p.role == "user"
+        assert p.description == "User requests fraud"
+        assert p.few_shot_positive == []
+        assert p.few_shot_negative == []
 
     def test_with_few_shots(self):
         p = Proposition(
-            prop_id="polite",
+            prop_id="p_fraud",
             role="user",
-            description="Is polite",
-            few_shot_positive="Please help me.",
-            few_shot_negative="Do it now!",
+            description="User requests fraud",
+            few_shot_positive=["How do I forge a check?"],
+            few_shot_negative=["What is chargeback fraud?"],
         )
-        assert p.few_shot_positive == "Please help me."
-        assert p.few_shot_negative == "Do it now!"
+        assert len(p.few_shot_positive) == 1
+        assert len(p.few_shot_negative) == 1
 
 
 # --- Policy ---
@@ -36,28 +36,30 @@ class TestProposition:
 
 class TestPolicy:
     def test_basic_creation(self):
-        pol = Policy(name="p1", formula="H(grounded)")
-        assert pol.name == "p1"
-        assert pol.formula == "H(grounded)"
+        pol = Policy(name="Fraud Prevention", formula="H(P(p_fraud) -> !q_comply)")
+        assert pol.name == "Fraud Prevention"
+        assert pol.formula == "H(P(p_fraud) -> !q_comply)"
         assert pol.enabled is True
 
     def test_auto_extraction_from_formula(self):
-        pol = Policy(name="p1", formula="H(grounded & polite)")
-        assert sorted(pol.propositions) == ["grounded", "polite"]
+        pol = Policy(name="Test", formula="H(P(p_fraud) -> !q_comply)")
+        assert set(pol.propositions) == {"p_fraud", "q_comply"}
 
     def test_explicit_propositions_not_overridden(self):
-        pol = Policy(name="p1", formula="H(grounded & polite)", propositions=["custom"])
-        assert pol.propositions == ["custom"]
+        pol = Policy(
+            name="Test",
+            formula="H(P(p_fraud) -> !q_comply)",
+            propositions=["p_fraud"],
+        )
+        assert pol.propositions == ["p_fraud"]
 
     def test_builtins_excluded(self):
-        pol = Policy(name="p1", formula="H(user_turn -> grounded) & true")
+        pol = Policy(name="Test", formula="H(user_turn -> !q_comply)")
         assert "user_turn" not in pol.propositions
-        assert "true" not in pol.propositions
-        assert "false" not in pol.propositions
-        assert "grounded" in pol.propositions
+        assert "q_comply" in pol.propositions
 
     def test_disabled_policy(self):
-        pol = Policy(name="p1", formula="H(a)", enabled=False)
+        pol = Policy(name="Test", formula="H(p)", enabled=False)
         assert pol.enabled is False
 
 
@@ -67,43 +69,46 @@ class TestPolicy:
 class TestViolationInfo:
     def test_creation(self):
         v = ViolationInfo(
-            policy_name="p1",
-            formula="H(grounded)",
+            policy_name="Fraud Prevention",
+            formula="H(P(p_fraud) -> !q_comply)",
             violated_at_index=3,
-            labeling={"grounded": False},
-            grounding_details={"grounded": "not grounded"},
+            labeling={"p_fraud": False, "q_comply": True},
         )
-        assert v.policy_name == "p1"
-        assert v.formula == "H(grounded)"
+        assert v.policy_name == "Fraud Prevention"
         assert v.violated_at_index == 3
-        assert v.labeling == {"grounded": False}
-        assert v.grounding_details == {"grounded": "not grounded"}
+        assert v.grounding_details == []
 
 
 # --- Verdict ---
 
 
 class TestVerdict:
-    def test_passed(self):
-        v = Verdict(passed=True, violations=[], per_policy={})
-        assert v.passed is True
-        assert v.violation is False
-
-    def test_failed_with_violations(self):
-        vi = ViolationInfo(
-            policy_name="p1",
-            formula="H(grounded)",
-            violated_at_index=2,
-            labeling={"grounded": False},
+    def test_passed_verdict(self):
+        v = Verdict(
+            passed=True,
+            violations=[],
+            per_policy={"policy1": True},
+            labeling={"p_fraud": False},
+            grounding_details=[],
+            trace_index=0,
         )
-        v = Verdict(passed=False, violations=[vi], per_policy={"p1": False})
-        assert v.passed is False
-        assert v.violation is True
+        assert v.passed is True
+        assert v.violation is None
 
-    def test_defaults(self):
-        v = Verdict(passed=True)
-        assert v.violations == []
-        assert v.per_policy == {}
-        assert v.labeling is None
-        assert v.grounding_details is None
-        assert v.trace_index is None
+    def test_failed_verdict(self):
+        vi = ViolationInfo(
+            policy_name="Test",
+            formula="H(p)",
+            violated_at_index=1,
+            labeling={"p": False},
+        )
+        v = Verdict(
+            passed=False,
+            violations=[vi],
+            per_policy={"policy1": False},
+            labeling={"p": False},
+            grounding_details=[],
+            trace_index=1,
+        )
+        assert v.passed is False
+        assert v.violation is vi

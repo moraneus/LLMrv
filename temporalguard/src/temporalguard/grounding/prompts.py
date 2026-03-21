@@ -58,13 +58,9 @@ DEFAULT_USER_PROMPT_TEMPLATE_ASSISTANT: str = (
 # ---------------------------------------------------------------------------
 
 
-def _to_list(value: str | list[str] | None) -> list[str]:
-    """Convert a few-shot field value to a list of strings."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    return list(value)
+def _to_list(value: list[str] | None) -> list[str]:
+    """Normalise a few-shot field to a list (handles None gracefully)."""
+    return list(value) if value else []
 
 
 # ---------------------------------------------------------------------------

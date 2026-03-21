@@ -86,11 +86,11 @@ class TestLoadPropositions:
         assert p.few_shot_positive == "Yes, I consent to sharing my data."
         assert p.few_shot_negative == "I don't want to share anything."
 
-    def test_few_shot_defaults_to_none(self, sample_yaml_file):
+    def test_few_shot_defaults_to_empty_list(self, sample_yaml_file):
         props, _ = load_yaml(str(sample_yaml_file))
         p = props[1]  # data_accessed has no few-shots
-        assert p.few_shot_positive is None
-        assert p.few_shot_negative is None
+        assert p.few_shot_positive == []
+        assert p.few_shot_negative == []
 
     def test_minimal(self, minimal_yaml_file):
         props, _ = load_yaml(str(minimal_yaml_file))
