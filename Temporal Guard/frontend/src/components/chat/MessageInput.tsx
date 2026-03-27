@@ -44,7 +44,7 @@ export default function MessageInput({
   return (
     <form
       onSubmit={handleSubmit}
-      className="border-t border-slate-200 bg-white px-4 py-3"
+      className="border-t border-border bg-dark-secondary px-4 py-3"
       data-testid="message-input-form"
     >
       <div className="flex items-end gap-2">
@@ -57,20 +57,20 @@ export default function MessageInput({
           placeholder="Type a message..."
           rows={1}
           disabled={disabled || sending}
-          className="flex-1 resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-slate-50"
+          className="flex-1 resize-none rounded-none border border-border bg-dark-primary px-3 py-2 text-sm font-mono text-terminal-bright placeholder-terminal-dim focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/20 disabled:opacity-50"
           data-testid="message-input"
         />
         <button
           type="submit"
           disabled={!text.trim() || disabled || sending}
-          className="rounded-lg bg-blue-500 p-2.5 text-white hover:bg-blue-600 disabled:opacity-50"
+          className="rounded-none border border-accent bg-transparent p-2.5 text-accent hover:bg-accent-muted disabled:opacity-30"
           aria-label="Send"
           data-testid="send-button"
         >
           {sending ? (
-            <Loader2 size={18} className="animate-spin" />
+            <Loader2 size={18} className="animate-spin text-accent" />
           ) : (
-            <Send size={18} />
+            <Send size={18} className="text-accent" />
           )}
         </button>
       </div>

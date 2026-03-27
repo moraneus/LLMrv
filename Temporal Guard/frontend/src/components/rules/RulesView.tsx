@@ -103,7 +103,7 @@ export default function RulesView() {
         className="flex h-full items-center justify-center"
         data-testid="rules-loading"
       >
-        <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+        <Loader2 className="h-8 w-8 animate-spin text-accent" />
       </div>
     );
   }
@@ -113,13 +113,13 @@ export default function RulesView() {
       {/* Propositions Section */}
       <section>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-slate-800">Propositions</h2>
+          <h2 className="text-lg font-mono font-bold text-accent uppercase tracking-wider">Propositions</h2>
           <button
             onClick={() => {
               setEditingProp(null);
               setShowPropEditor(true);
             }}
-            className="flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600"
+            className="btn-primary flex items-center gap-1.5 rounded-none px-3 py-2 text-sm font-medium"
             aria-label="Add proposition"
             data-testid="add-proposition"
           >
@@ -129,13 +129,13 @@ export default function RulesView() {
         </div>
 
         {propositions.status === "error" && (
-          <p className="text-sm text-red-500" data-testid="propositions-error">
+          <p className="text-sm text-terminal-red" data-testid="propositions-error">
             {propositions.error}
           </p>
         )}
 
         {propsList.length === 0 && !propsLoading && (
-          <p className="text-sm text-slate-400" data-testid="no-propositions">
+          <p className="text-sm text-terminal-dim" data-testid="no-propositions">
             No propositions defined yet. Click "Add" to create one.
           </p>
         )}
@@ -156,10 +156,10 @@ export default function RulesView() {
       {/* Policies Section */}
       <section>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-slate-800">Policies</h2>
+          <h2 className="text-lg font-mono font-bold text-accent uppercase tracking-wider">Policies</h2>
           <button
             onClick={() => setShowFormulaBuilder(true)}
-            className="flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-600"
+            className="btn-primary flex items-center gap-1.5 rounded-none px-3 py-2 text-sm font-medium"
             aria-label="Add policy"
             data-testid="add-policy"
           >
@@ -169,13 +169,13 @@ export default function RulesView() {
         </div>
 
         {policies.status === "error" && (
-          <p className="text-sm text-red-500" data-testid="policies-error">
+          <p className="text-sm text-terminal-red" data-testid="policies-error">
             {policies.error}
           </p>
         )}
 
         {policiesList.length === 0 && !policiesLoading && (
-          <p className="text-sm text-slate-400" data-testid="no-policies">
+          <p className="text-sm text-terminal-dim" data-testid="no-policies">
             No policies defined yet.{" "}
             {propsList.length === 0
               ? 'You can still click "Add" and use the built-in proposition user_turn.'
@@ -240,27 +240,27 @@ export default function RulesView() {
       >
         <div className="space-y-4">
           {promptLoading && (
-            <div className="flex items-center gap-2 text-sm text-slate-600">
+            <div className="flex items-center gap-2 text-sm text-terminal-dim">
               <Loader2 className="h-4 w-4 animate-spin" />
               Loading prompt...
             </div>
           )}
-          {promptError && <p className="text-sm text-red-500">{promptError}</p>}
+          {promptError && <p className="text-sm text-terminal-red">{promptError}</p>}
           {promptPreview && (
             <>
               <div>
-                <p className="mb-1 text-xs font-semibold uppercase text-slate-500">
+                <p className="mb-1 text-xs font-semibold text-terminal-dim uppercase tracking-wider">
                   System Prompt
                 </p>
-                <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-none border border-border bg-dark-primary p-3 text-xs text-terminal-text">
                   {promptPreview.system_prompt}
                 </pre>
               </div>
               <div>
-                <p className="mb-1 text-xs font-semibold uppercase text-slate-500">
+                <p className="mb-1 text-xs font-semibold text-terminal-dim uppercase tracking-wider">
                   User Prompt
                 </p>
-                <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+                <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-none border border-border bg-dark-primary p-3 text-xs text-terminal-text">
                   {promptPreview.user_prompt}
                 </pre>
               </div>

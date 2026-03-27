@@ -117,7 +117,7 @@ export default function FormulaBuilder({
       <div className="space-y-4">
         <div>
           <label
-            className="mb-1 block text-sm font-medium text-slate-600"
+            className="mb-1 block text-terminal-text font-mono text-sm"
             htmlFor="policy-name"
           >
             Policy Name
@@ -129,14 +129,14 @@ export default function FormulaBuilder({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Fraud Prevention Policy"
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+            className="w-full rounded-none border border-border bg-dark-primary px-3 py-2 text-sm text-terminal-bright placeholder-terminal-dim focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/20"
             data-testid="policy-name-input"
           />
         </div>
 
         {propositionChips.length > 0 && (
           <div>
-            <p className="mb-2 text-sm font-medium text-slate-600">
+            <p className="mb-2 text-terminal-text font-mono text-sm">
               Available Propositions
             </p>
             <div
@@ -148,7 +148,7 @@ export default function FormulaBuilder({
                   key={p.prop_id}
                   type="button"
                   onClick={() => insertAtCursor(p.prop_id)}
-                  className="rounded-full bg-blue-50 px-2.5 py-1 font-mono text-xs text-blue-600 hover:bg-blue-100"
+                  className="rounded-none bg-accent-muted border border-accent/20 text-accent font-mono text-xs px-2.5 py-1 hover:bg-accent/15 transition-colors"
                   title={`${p.role}: ${p.description}`}
                   data-testid={`chip-${p.prop_id}`}
                 >
@@ -156,15 +156,15 @@ export default function FormulaBuilder({
                 </button>
               ))}
             </div>
-            <p className="mt-1 text-xs text-slate-400">
-              Built-in proposition: <code className="font-mono">user_turn</code>{" "}
+            <p className="mt-1 text-xs text-terminal-dim">
+              Built-in proposition: <code className="font-mono text-accent">user_turn</code>{" "}
               is true on user messages and false otherwise.
             </p>
           </div>
         )}
 
         <div>
-          <p className="mb-2 text-sm font-medium text-slate-600">Operators</p>
+          <p className="mb-2 text-terminal-text font-mono text-sm">Operators</p>
           <div
             className="flex flex-wrap gap-1.5"
             data-testid="operator-buttons"
@@ -174,7 +174,7 @@ export default function FormulaBuilder({
                 key={label}
                 type="button"
                 onClick={() => insertAtCursor(insert)}
-                className="rounded-lg border border-slate-200 px-2.5 py-1 font-mono text-sm text-slate-700 hover:bg-slate-50"
+                className="rounded-none border border-border text-terminal-text font-mono px-2.5 py-1 text-sm hover:bg-dark-hover hover:text-accent transition-colors"
                 title={desc}
                 data-testid={`op-${label.replace(/[()]/g, "")}`}
               >
@@ -186,7 +186,7 @@ export default function FormulaBuilder({
 
         <div>
           <label
-            className="mb-1 block text-sm font-medium text-slate-600"
+            className="mb-1 block text-terminal-text font-mono text-sm"
             htmlFor="formula"
           >
             Formula
@@ -199,7 +199,7 @@ export default function FormulaBuilder({
             value={formula}
             onChange={(e) => setFormula(e.target.value)}
             placeholder="H(p_fraud -> !q_comply)"
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+            className="w-full rounded-none border border-border bg-dark-primary px-3 py-2 font-mono text-sm text-accent placeholder-terminal-dim focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/20"
             data-testid="formula-input"
           />
           {formula.trim() && !validating && validation && (
@@ -209,13 +209,13 @@ export default function FormulaBuilder({
             >
               {validation.valid ? (
                 <>
-                  <CheckCircle size={14} className="text-emerald-500" />
-                  <span className="text-emerald-600">Formula is valid</span>
+                  <CheckCircle size={14} className="text-terminal-green" />
+                  <span className="text-terminal-green">Formula is valid</span>
                 </>
               ) : (
                 <>
-                  <XCircle size={14} className="text-red-500" />
-                  <span className="text-red-600">
+                  <XCircle size={14} className="text-terminal-red" />
+                  <span className="text-terminal-red">
                     {validation.error || "Invalid formula"}
                   </span>
                 </>
@@ -224,24 +224,24 @@ export default function FormulaBuilder({
           )}
         </div>
 
-        <div className="rounded-lg bg-slate-50 p-3">
-          <p className="mb-1 text-xs font-medium text-slate-500">
+        <div className="rounded-none bg-dark-primary border border-border p-3">
+          <p className="mb-1 text-xs font-medium text-terminal-dim">
             Temporal Operators Reference
           </p>
-          <div className="space-y-0.5 text-xs text-slate-400">
+          <div className="space-y-0.5 text-xs text-terminal-dim">
             <p>
-              <code className="font-mono">H(φ)</code> = φ held at every past
+              <code className="font-mono text-accent/70">H(φ)</code> = φ held at every past
               step
             </p>
             <p>
-              <code className="font-mono">P(φ)</code> = φ held at some past step
+              <code className="font-mono text-accent/70">P(φ)</code> = φ held at some past step
             </p>
             <p>
-              <code className="font-mono">Y(φ)</code> = φ held at the previous
+              <code className="font-mono text-accent/70">Y(φ)</code> = φ held at the previous
               step
             </p>
             <p>
-              <code className="font-mono">φ S ψ</code> = ψ occurred and φ held
+              <code className="font-mono text-accent/70">φ S ψ</code> = ψ occurred and φ held
               continuously since
             </p>
           </div>
@@ -251,7 +251,7 @@ export default function FormulaBuilder({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+            className="rounded-none border border-border px-4 py-2 text-sm font-medium text-terminal-dim hover:bg-dark-hover hover:text-terminal-text"
             data-testid="policy-cancel"
           >
             Cancel
@@ -259,7 +259,7 @@ export default function FormulaBuilder({
           <button
             type="submit"
             disabled={!validation?.valid || !name.trim() || saving}
-            className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+            className="btn-primary rounded-none px-4 py-2 text-sm font-medium"
             data-testid="policy-save"
           >
             Save Policy

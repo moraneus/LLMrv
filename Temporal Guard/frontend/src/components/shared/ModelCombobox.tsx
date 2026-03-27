@@ -131,29 +131,29 @@ export default function ModelCombobox({
         type="button"
         onClick={() => !disabled && setOpen(!open)}
         aria-disabled={disabled || undefined}
-        className={`flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-left text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 ${
+        className={`flex w-full items-center justify-between rounded-none border border-border bg-dark-primary px-3 py-2 text-left text-sm font-mono focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/30 ${
           disabled
             ? "cursor-not-allowed opacity-50"
-            : "cursor-pointer hover:bg-slate-50"
+            : "cursor-pointer hover:bg-dark-hover"
         }`}
         data-testid={testId ? `${testId}-trigger` : undefined}
       >
-        <span className={value ? "text-slate-800" : "text-slate-400"}>
+        <span className={value ? "text-terminal-text" : "text-terminal-dim"}>
           {displayText}
         </span>
-        <ChevronDown size={16} className="text-slate-400" />
+        <ChevronDown size={16} className="text-terminal-dim" />
       </button>
 
       {open && !disabled && (
         <div
-          className="absolute z-50 mt-1 w-full rounded-lg border border-slate-200 bg-white shadow-lg"
+          className="absolute z-50 mt-1 w-full rounded-none border border-accent/20 bg-dark-primary"
           data-testid={testId ? `${testId}-dropdown` : undefined}
         >
-          <div className="border-b border-slate-100 p-2">
+          <div className="border-b border-border p-2">
             <div className="relative">
               <Search
                 size={14}
-                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400"
+                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-terminal-dim"
               />
               <input
                 ref={searchRef}
@@ -162,14 +162,14 @@ export default function ModelCombobox({
                 onChange={(e) => setSearch(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Search models..."
-                className="w-full rounded-md border border-slate-200 py-1.5 pl-8 pr-3 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                className="w-full rounded-none border-b border-border bg-dark-primary py-1.5 pl-8 pr-3 text-sm text-terminal-text placeholder-terminal-dim font-mono focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/30"
                 data-testid={testId ? `${testId}-search` : undefined}
               />
             </div>
           </div>
           <div ref={listRef} className="max-h-64 overflow-y-auto">
             {filtered.length === 0 ? (
-              <div className="px-3 py-6 text-center text-sm text-slate-400">
+              <div className="px-3 py-6 text-center text-sm text-terminal-dim font-mono">
                 No models found
               </div>
             ) : (
@@ -188,10 +188,10 @@ export default function ModelCombobox({
                     type="button"
                     onClick={() => handleSelect(m.id)}
                     onMouseEnter={() => setHighlightIndex(i)}
-                    className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm ${
+                    className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm font-mono ${
                       i === highlightIndex
-                        ? "bg-blue-50 text-blue-700"
-                        : "text-slate-700 hover:bg-slate-50"
+                        ? "bg-accent-muted text-accent"
+                        : "text-terminal-text hover:bg-dark-hover"
                     } ${m.id === value ? "font-medium" : ""}`}
                     data-testid={
                       testId
@@ -200,13 +200,13 @@ export default function ModelCombobox({
                     }
                   >
                     <span className="min-w-0 truncate">{m.name}</span>
-                    <span className="ml-2 flex shrink-0 items-center gap-2 text-xs text-slate-400">
+                    <span className="ml-2 flex shrink-0 items-center gap-2 text-xs text-terminal-dim">
                       {ctx && (
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono">
+                        <span className="rounded-none bg-dark-secondary px-1.5 py-0.5 font-mono">
                           {ctx}
                         </span>
                       )}
-                      {priceStr && <span>{priceStr}</span>}
+                      {priceStr && <span className="bg-dark-secondary px-1.5 py-0.5 rounded-none">{priceStr}</span>}
                     </span>
                   </button>
                 );

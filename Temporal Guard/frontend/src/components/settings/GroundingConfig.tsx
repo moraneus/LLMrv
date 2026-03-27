@@ -94,16 +94,16 @@ export default function GroundingConfig({
 
   return (
     <div
-      className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
+      className="rounded-none border border-border bg-dark-surface p-6"
       data-testid="grounding-config"
     >
-      <h3 className="mb-4 text-base font-semibold text-slate-800">
+      <h3 className="mb-4 text-sm font-mono font-bold text-accent uppercase tracking-wider">
         Grounding Model
       </h3>
 
       <div className="space-y-4">
         <div>
-          <label className="mb-2 block text-sm font-medium text-slate-600">
+          <label className="mb-2 block text-terminal-text font-mono text-sm">
             Provider
           </label>
           <div
@@ -114,10 +114,10 @@ export default function GroundingConfig({
               <button
                 key={value}
                 onClick={() => handleProviderChange(value)}
-                className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
+                className={`rounded-none border px-3 py-1.5 text-sm font-medium transition-colors ${
                   grounding.provider === value
-                    ? "border-blue-400 bg-blue-50 text-blue-600"
-                    : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                    ? "border-accent/40 bg-accent-muted text-accent"
+                    : "border-border text-terminal-dim hover:bg-dark-hover hover:text-terminal-text"
                 }`}
                 data-testid={`provider-${value}`}
               >
@@ -129,11 +129,11 @@ export default function GroundingConfig({
 
         {isOpenRouter && (
           <div>
-            <label className="mb-2 block text-sm font-medium text-slate-600">
+            <label className="mb-2 block text-terminal-text font-mono text-sm">
               API Key
             </label>
             <div className="space-y-2" data-testid="api-key-mode">
-              <label className="flex items-center gap-2 text-sm text-slate-600">
+              <label className="flex items-center gap-2 text-sm text-terminal-text">
                 <input
                   type="radio"
                   name="api-key-mode"
@@ -143,7 +143,7 @@ export default function GroundingConfig({
                 />
                 Same as Chat Model
               </label>
-              <label className="flex items-center gap-2 text-sm text-slate-600">
+              <label className="flex items-center gap-2 text-sm text-terminal-text">
                 <input
                   type="radio"
                   name="api-key-mode"
@@ -166,7 +166,7 @@ export default function GroundingConfig({
                     setGrounding({ ...grounding, api_key: e.target.value })
                   }
                   placeholder="sk-or-v1-..."
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  className="w-full rounded-none border border-border bg-dark-primary px-3 py-2 text-sm text-terminal-bright placeholder-terminal-dim focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/20"
                   data-testid="grounding-api-key"
                 />
               )}
@@ -177,7 +177,7 @@ export default function GroundingConfig({
         {!isOpenRouter && (
           <div>
             <label
-              className="mb-1 block text-sm font-medium text-slate-600"
+              className="mb-1 block text-terminal-text font-mono text-sm"
               htmlFor="base-url"
             >
               Base URL
@@ -189,7 +189,7 @@ export default function GroundingConfig({
               onChange={(e) =>
                 setGrounding({ ...grounding, base_url: e.target.value })
               }
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              className="w-full rounded-none border border-border bg-dark-primary px-3 py-2 text-sm text-terminal-bright placeholder-terminal-dim focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/20"
               data-testid="grounding-base-url"
             />
           </div>
@@ -197,7 +197,7 @@ export default function GroundingConfig({
 
         <div>
           <label
-            className="mb-1 block text-sm font-medium text-slate-600"
+            className="mb-1 block text-terminal-text font-mono text-sm"
             htmlFor="grounding-model"
           >
             Model
@@ -220,7 +220,7 @@ export default function GroundingConfig({
                 onChange={(e) =>
                   setGrounding({ ...grounding, model: e.target.value })
                 }
-                className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                className="flex-1 rounded-none border border-border bg-dark-primary px-3 py-2 text-sm text-terminal-bright focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/20"
                 data-testid="grounding-model-select"
               >
                 {grounding.model &&
@@ -240,7 +240,7 @@ export default function GroundingConfig({
             <button
               onClick={handleTest}
               disabled={testing}
-              className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              className="rounded-none border border-border px-3 py-2 text-sm font-medium text-terminal-dim hover:bg-dark-hover hover:text-terminal-text disabled:opacity-50"
               data-testid="test-grounding"
             >
               {testing ? (
@@ -254,7 +254,7 @@ export default function GroundingConfig({
             groundingModelsError &&
             groundingModels.length === 0 && (
               <p
-                className="mt-1 text-xs text-amber-600"
+                className="mt-1 text-xs text-terminal-amber"
                 data-testid="grounding-models-error"
               >
                 {groundingModelsError} — Click "Test" to retry.
@@ -264,7 +264,7 @@ export default function GroundingConfig({
             openRouterModelsError &&
             openRouterModels.length === 0 && (
               <p
-                className="mt-1 text-xs text-amber-600"
+                className="mt-1 text-xs text-terminal-amber"
                 data-testid="grounding-openrouter-models-error"
               >
                 {openRouterModelsError}
@@ -279,15 +279,15 @@ export default function GroundingConfig({
           >
             {groundingHealth.healthy ? (
               <>
-                <CheckCircle size={14} className="text-emerald-500" />
-                <span className="text-emerald-600">
+                <CheckCircle size={14} className="text-terminal-green" />
+                <span className="text-terminal-green">
                   Connected ({groundingHealth.provider || grounding.provider})
                 </span>
               </>
             ) : (
               <>
-                <XCircle size={14} className="text-red-500" />
-                <span className="text-red-600">Connection failed</span>
+                <XCircle size={14} className="text-terminal-red" />
+                <span className="text-terminal-red">Connection failed</span>
               </>
             )}
           </div>
@@ -296,7 +296,7 @@ export default function GroundingConfig({
         <div className="flex justify-end">
           <button
             onClick={handleSave}
-            className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600"
+            className="btn-primary rounded-none px-4 py-2 text-sm font-medium"
             data-testid="save-grounding"
           >
             Save

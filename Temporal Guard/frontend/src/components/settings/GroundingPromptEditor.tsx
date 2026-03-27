@@ -87,16 +87,16 @@ export default function GroundingPromptEditor({
 
   return (
     <div
-      className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
+      className="rounded-none border border-border bg-dark-surface p-6"
       data-testid="grounding-prompt-editor"
     >
       <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-base font-semibold text-slate-800">
+        <h3 className="text-sm font-mono font-bold text-accent uppercase tracking-wider">
           Grounding Prompt
         </h3>
         <button
           onClick={handleReset}
-          className="text-sm text-slate-500 hover:text-slate-700"
+          className="text-terminal-dim hover:text-terminal-text font-mono text-xs"
           data-testid="reset-prompts"
         >
           Reset to Default
@@ -106,7 +106,7 @@ export default function GroundingPromptEditor({
       <div className="space-y-4">
         <div>
           <label
-            className="mb-1 block text-sm font-medium text-slate-600"
+            className="mb-1 block text-terminal-text font-mono text-sm"
             htmlFor="system-prompt"
           >
             System Prompt
@@ -116,14 +116,14 @@ export default function GroundingPromptEditor({
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
             rows={8}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+            className="w-full rounded-none border border-border bg-dark-primary font-mono text-sm text-terminal-bright focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/20 px-3 py-2"
             data-testid="system-prompt-textarea"
           />
         </div>
 
         <div>
           <label
-            className="mb-1 block text-sm font-medium text-slate-600"
+            className="mb-1 block text-terminal-text font-mono text-sm"
             htmlFor="user-prompt-user"
           >
             User Prompt Template (User Propositions)
@@ -133,10 +133,10 @@ export default function GroundingPromptEditor({
             value={userPromptUser}
             onChange={(e) => setUserPromptUser(e.target.value)}
             rows={10}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+            className="w-full rounded-none border border-border bg-dark-primary font-mono text-sm text-terminal-bright focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/20 px-3 py-2"
             data-testid="user-prompt-user-textarea"
           />
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-terminal-dim text-xs">
             Template variables: {"{proposition_description}"},{" "}
             {"{few_shot_examples}"}, {"{message_text}"}
           </p>
@@ -144,7 +144,7 @@ export default function GroundingPromptEditor({
 
         <div>
           <label
-            className="mb-1 block text-sm font-medium text-slate-600"
+            className="mb-1 block text-terminal-text font-mono text-sm"
             htmlFor="user-prompt-assistant"
           >
             User Prompt Template (Assistant Propositions)
@@ -154,10 +154,10 @@ export default function GroundingPromptEditor({
             value={userPromptAssistant}
             onChange={(e) => setUserPromptAssistant(e.target.value)}
             rows={10}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+            className="w-full rounded-none border border-border bg-dark-primary font-mono text-sm text-terminal-bright focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/20 px-3 py-2"
             data-testid="user-prompt-assistant-textarea"
           />
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-terminal-dim text-xs">
             Template variables: {"{proposition_description}"},{" "}
             {"{few_shot_examples}"}, {"{message_text}"}
           </p>
@@ -166,7 +166,7 @@ export default function GroundingPromptEditor({
         <div className="flex justify-end">
           <button
             onClick={handleSave}
-            className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600"
+            className="btn-primary rounded-none px-4 py-2 text-sm font-medium"
             data-testid="save-prompts"
           >
             Save Changes

@@ -16,12 +16,12 @@ export default function RuleCard({
 }: RuleCardProps) {
   return (
     <div
-      className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+      className="rounded-none border border-border bg-dark-surface p-4"
       data-testid={`policy-card-${policy.policy_id}`}
     >
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-slate-800">
+          <span className="text-sm text-terminal-bright font-mono font-bold">
             {policy.name}
           </span>
           <Badge variant={policy.enabled ? "success" : "neutral"}>
@@ -38,11 +38,11 @@ export default function RuleCard({
               aria-label={`Toggle policy ${policy.name}`}
               data-testid={`toggle-policy-${policy.policy_id}`}
             />
-            <div className="h-5 w-9 rounded-full bg-slate-200 after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:bg-blue-500 peer-checked:after:translate-x-full peer-focus:ring-2 peer-focus:ring-blue-300" />
+            <div className="h-5 w-9 rounded-full bg-dark-hover after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-terminal-dim after:transition-all after:content-[''] peer-checked:bg-accent peer-checked:after:translate-x-full peer-checked:after:bg-dark-primary peer-focus:ring-2 peer-focus:ring-accent/30" />
           </label>
           <button
             onClick={() => onDelete(policy.policy_id)}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-500"
+            className="rounded-none p-1.5 text-terminal-dim hover:bg-terminal-red/10 hover:text-terminal-red"
             aria-label={`Delete policy ${policy.name}`}
             data-testid={`delete-policy-${policy.policy_id}`}
           >
@@ -51,9 +51,9 @@ export default function RuleCard({
         </div>
       </div>
 
-      <div className="mb-2 rounded-lg bg-slate-50 px-3 py-2">
+      <div className="mb-2 bg-dark-primary border border-border rounded-none px-3 py-2">
         <code
-          className="font-mono text-sm text-slate-700"
+          className="text-accent font-mono text-sm"
           data-testid="policy-formula"
         >
           {policy.formula_str}
@@ -65,7 +65,7 @@ export default function RuleCard({
           {policy.propositions.map((propId) => (
             <span
               key={propId}
-              className="rounded-full bg-blue-50 px-2 py-0.5 font-mono text-xs text-blue-600"
+              className="rounded-none bg-accent-muted border border-accent/20 text-accent font-mono text-xs px-2 py-0.5"
             >
               {propId}
             </span>

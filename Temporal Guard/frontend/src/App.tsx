@@ -8,9 +8,9 @@ import Sidebar from "@/components/shared/Sidebar";
 
 function Layout() {
   return (
-    <div className="flex h-screen" data-testid="app-layout">
+    <div className="flex h-screen bg-dark-primary bg-scanlines" data-testid="app-layout">
       <Sidebar />
-      <main className="flex-1 overflow-auto" data-testid="main-content">
+      <main className="relative flex-1 overflow-auto" data-testid="main-content">
         <ErrorBoundary>
           <Outlet />
         </ErrorBoundary>

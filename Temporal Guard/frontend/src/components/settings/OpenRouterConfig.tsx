@@ -71,17 +71,17 @@ export default function OpenRouterConfig({
 
   return (
     <div
-      className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
+      className="rounded-none border border-border bg-dark-surface p-6"
       data-testid="openrouter-config"
     >
-      <h3 className="mb-4 text-base font-semibold text-slate-800">
+      <h3 className="mb-4 text-sm font-mono font-bold text-accent uppercase tracking-wider">
         Chat Model (OpenRouter)
       </h3>
 
       <div className="space-y-4">
         <div>
           <label
-            className="mb-1 block text-sm font-medium text-slate-600"
+            className="mb-1 block text-terminal-text font-mono text-sm"
             htmlFor="api-key"
           >
             API Key
@@ -94,13 +94,13 @@ export default function OpenRouterConfig({
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder="sk-or-v1-..."
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-10 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                className="w-full rounded-none border border-border bg-dark-primary px-3 py-2 pr-10 text-sm text-terminal-bright placeholder-terminal-dim focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/20"
                 data-testid="openrouter-api-key"
               />
               <button
                 type="button"
                 onClick={() => setShowKey(!showKey)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-terminal-dim hover:text-terminal-text"
                 aria-label={showKey ? "Hide API key" : "Show API key"}
                 data-testid="toggle-api-key-visibility"
               >
@@ -110,7 +110,7 @@ export default function OpenRouterConfig({
             <button
               onClick={handleTest}
               disabled={testing || !apiKey}
-              className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              className="rounded-none border border-border px-3 py-2 text-sm font-medium text-terminal-dim hover:bg-dark-hover hover:text-terminal-text disabled:opacity-50"
               data-testid="test-openrouter"
             >
               {testing ? (
@@ -124,13 +124,13 @@ export default function OpenRouterConfig({
             <div className="mt-1 flex items-center gap-1 text-xs">
               {testResult ? (
                 <>
-                  <CheckCircle size={14} className="text-emerald-500" />
-                  <span className="text-emerald-600">Connected</span>
+                  <CheckCircle size={14} className="text-terminal-green" />
+                  <span className="text-terminal-green">Connected</span>
                 </>
               ) : (
                 <>
-                  <XCircle size={14} className="text-red-500" />
-                  <span className="text-red-600">Connection failed</span>
+                  <XCircle size={14} className="text-terminal-red" />
+                  <span className="text-terminal-red">Connection failed</span>
                 </>
               )}
             </div>
@@ -139,7 +139,7 @@ export default function OpenRouterConfig({
 
         <div>
           <label
-            className="mb-1 block text-sm font-medium text-slate-600"
+            className="mb-1 block text-terminal-text font-mono text-sm"
             htmlFor="or-model"
           >
             Model
@@ -154,7 +154,7 @@ export default function OpenRouterConfig({
           />
           {modelsError && openRouterModels.length === 0 && (
             <p
-              className="mt-1 text-xs text-amber-600"
+              className="mt-1 text-xs text-terminal-amber"
               data-testid="openrouter-models-error"
             >
               {modelsError}
@@ -163,7 +163,7 @@ export default function OpenRouterConfig({
         </div>
 
         <div>
-          <label className="flex items-center gap-2 text-sm text-slate-600">
+          <label className="flex items-center gap-2 text-sm text-terminal-text">
             <input
               type="checkbox"
               checked={useCustomModel}
@@ -173,7 +173,7 @@ export default function OpenRouterConfig({
                   setCustomModel("");
                 }
               }}
-              className="rounded border-slate-300"
+              className="rounded border-border accent-accent"
               data-testid="custom-model-checkbox"
             />
             Use custom model ID
@@ -184,7 +184,7 @@ export default function OpenRouterConfig({
               value={customModel}
               onChange={(e) => setCustomModel(e.target.value)}
               placeholder="e.g. anthropic/claude-3-opus"
-              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              className="mt-2 w-full rounded-none border border-border bg-dark-primary px-3 py-2 font-mono text-sm text-terminal-bright placeholder-terminal-dim focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/20"
               data-testid="custom-model-input"
             />
           )}
@@ -193,7 +193,7 @@ export default function OpenRouterConfig({
         <div className="flex justify-end">
           <button
             onClick={handleSave}
-            className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600"
+            className="btn-primary rounded-none px-4 py-2 text-sm font-medium"
             data-testid="save-openrouter"
           >
             Save

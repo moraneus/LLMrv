@@ -34,14 +34,14 @@ export default class ErrorBoundary extends Component<Props, State> {
           className="flex flex-col items-center justify-center gap-4 p-8"
           data-testid="error-boundary-fallback"
         >
-          <AlertTriangle className="h-10 w-10 text-amber-500" />
-          <h2 className="text-lg font-semibold text-slate-800">
+          <AlertTriangle className="h-10 w-10 text-terminal-amber" />
+          <h2 className="text-lg font-semibold text-terminal-bright font-mono">
             Something went wrong
           </h2>
-          <p className="text-sm text-slate-500">{this.state.error?.message}</p>
+          <p className="text-sm text-terminal-dim font-mono">{this.state.error?.message}</p>
           <button
             onClick={() => this.setState({ hasError: false, error: null })}
-            className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600"
+            className="btn-primary rounded-none px-4 py-2 text-sm font-medium font-mono"
           >
             Try again
           </button>

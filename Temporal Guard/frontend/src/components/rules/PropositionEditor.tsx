@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Monitor, User } from "lucide-react";
 
 import type { Proposition } from "@/types";
 
@@ -53,7 +54,7 @@ export default function PropositionEditor({
       <div className="space-y-4">
         <div>
           <label
-            className="mb-1 block text-sm font-medium text-slate-600"
+            className="mb-1 block text-terminal-text font-mono text-sm"
             htmlFor="prop-id"
           >
             Proposition ID
@@ -66,38 +67,40 @@ export default function PropositionEditor({
             onChange={(e) => setPropId(e.target.value)}
             disabled={isEdit}
             placeholder="p_fraud"
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-slate-50 disabled:text-slate-400"
+            className="w-full rounded-none border border-border bg-dark-primary px-3 py-2 font-mono text-sm text-terminal-bright placeholder-terminal-dim focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/20 disabled:opacity-50"
             data-testid="prop-id-input"
           />
         </div>
 
         <div>
-          <label className="mb-2 block text-sm font-medium text-slate-600">
+          <label className="mb-2 block text-terminal-text font-mono text-sm">
             Role
           </label>
-          <div className="flex gap-3" data-testid="prop-role-select">
-            <label className="flex items-center gap-2 text-sm">
+          <div className="flex gap-4" data-testid="prop-role-select">
+            <label className="flex items-center gap-2 text-sm text-terminal-text">
               <input
                 type="radio"
                 name="role"
                 value="user"
                 checked={role === "user"}
                 onChange={() => setRole("user")}
-                className="text-blue-500 focus:ring-blue-400"
+                className="accent-accent"
                 data-testid="prop-role-user"
               />
+              <User size={14} className="text-terminal-cyan" />
               User
             </label>
-            <label className="flex items-center gap-2 text-sm">
+            <label className="flex items-center gap-2 text-sm text-terminal-text">
               <input
                 type="radio"
                 name="role"
                 value="assistant"
                 checked={role === "assistant"}
                 onChange={() => setRole("assistant")}
-                className="text-blue-500 focus:ring-blue-400"
+                className="accent-accent"
                 data-testid="prop-role-assistant"
               />
+              <Monitor size={14} className="text-terminal-amber" />
               Assistant
             </label>
           </div>
@@ -105,7 +108,7 @@ export default function PropositionEditor({
 
         <div>
           <label
-            className="mb-1 block text-sm font-medium text-slate-600"
+            className="mb-1 block text-terminal-text font-mono text-sm"
             htmlFor="description"
           >
             Description
@@ -117,7 +120,7 @@ export default function PropositionEditor({
             onChange={(e) => setDescription(e.target.value)}
             placeholder="The user requests methods for committing financial fraud"
             rows={3}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+            className="w-full rounded-none border border-border bg-dark-primary px-3 py-2 text-sm text-terminal-bright placeholder-terminal-dim focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/20"
             data-testid="prop-description-input"
           />
         </div>
@@ -126,7 +129,7 @@ export default function PropositionEditor({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+            className="rounded-none border border-border px-4 py-2 text-sm font-medium text-terminal-dim hover:bg-dark-hover hover:text-terminal-text"
             data-testid="prop-cancel"
           >
             Cancel
@@ -134,7 +137,7 @@ export default function PropositionEditor({
           <button
             type="submit"
             disabled={!isValid || saving}
-            className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+            className="btn-primary rounded-none px-4 py-2 text-sm font-medium"
             data-testid="prop-save"
           >
             {saving
@@ -147,12 +150,12 @@ export default function PropositionEditor({
           </button>
         </div>
         {saving && !isEdit && (
-          <p className="text-xs text-slate-500" data-testid="prop-generating">
+          <p className="text-xs text-terminal-dim" data-testid="prop-generating">
             Generating few-shot examples with the chat model and saving to DB...
           </p>
         )}
         {saveError && (
-          <p className="text-sm text-red-500" data-testid="prop-save-error">
+          <p className="text-sm text-terminal-red" data-testid="prop-save-error">
             {saveError}
           </p>
         )}

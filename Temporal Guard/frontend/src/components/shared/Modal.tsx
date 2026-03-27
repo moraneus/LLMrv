@@ -25,24 +25,25 @@ export default function Modal({ open, onClose, title, children }: ModalProps) {
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
       data-testid="modal-overlay"
       onClick={(e) => {
         if (e.target === overlayRef.current) onClose();
       }}
     >
       <div
-        className="w-full max-w-lg rounded-xl bg-white p-6 shadow-lg"
+        className="w-full max-w-lg rounded-none border border-accent/30 bg-dark-primary p-6"
         role="dialog"
         aria-modal="true"
         aria-label={title}
         data-testid="modal"
       >
+        <div className="mb-3 text-xs text-terminal-dim font-mono">┌── {title} ──</div>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
+          <h2 className="text-sm font-mono uppercase tracking-wider text-accent">{title}</h2>
           <button
             onClick={onClose}
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            className="p-1 text-terminal-dim hover:text-terminal-red"
             aria-label="Close modal"
             data-testid="modal-close"
           >

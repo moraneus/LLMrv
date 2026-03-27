@@ -1,4 +1,4 @@
-import { FileText, Pencil, Trash2 } from "lucide-react";
+import { FileText, Monitor, Pencil, Trash2, User } from "lucide-react";
 
 import Badge from "@/components/shared/Badge";
 import type { Proposition } from "@/types";
@@ -18,22 +18,29 @@ export default function PropositionCard({
 }: PropositionCardProps) {
   return (
     <div
-      className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+      className="border border-border bg-dark-surface p-4"
       data-testid={`proposition-card-${proposition.prop_id}`}
     >
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-sm font-semibold text-blue-600">
+          <span className="text-accent font-mono font-bold text-sm">
             {proposition.prop_id}
           </span>
-          <Badge variant={proposition.role === "user" ? "info" : "neutral"}>
-            {proposition.role}
-          </Badge>
+          <div className="flex items-center gap-1">
+            {proposition.role === "user" ? (
+              <User size={12} className="text-terminal-cyan" />
+            ) : (
+              <Monitor size={12} className="text-terminal-amber" />
+            )}
+            <Badge variant={proposition.role === "user" ? "info" : "warning"}>
+              {proposition.role}
+            </Badge>
+          </div>
         </div>
         <div className="flex gap-1">
           <button
             onClick={() => onViewPrompt(proposition)}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            className="p-1.5 text-terminal-dim hover:bg-dark-hover hover:text-terminal-text"
             aria-label={`View grounding prompt for ${proposition.prop_id}`}
             data-testid={`view-prompt-${proposition.prop_id}`}
           >
@@ -41,7 +48,7 @@ export default function PropositionCard({
           </button>
           <button
             onClick={() => onEdit(proposition)}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            className="p-1.5 text-terminal-dim hover:bg-dark-hover hover:text-terminal-text"
             aria-label={`Edit proposition ${proposition.prop_id}`}
             data-testid={`edit-proposition-${proposition.prop_id}`}
           >
@@ -49,7 +56,7 @@ export default function PropositionCard({
           </button>
           <button
             onClick={() => onDelete(proposition.prop_id)}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-500"
+            className="p-1.5 text-terminal-dim hover:bg-terminal-red/10 hover:text-terminal-red"
             aria-label={`Delete proposition ${proposition.prop_id}`}
             data-testid={`delete-proposition-${proposition.prop_id}`}
           >
@@ -57,9 +64,9 @@ export default function PropositionCard({
           </button>
         </div>
       </div>
-      <p className="text-sm text-slate-600">{proposition.description}</p>
+      <p className="text-sm text-terminal-text">{proposition.description}</p>
       {proposition.few_shot_generated_at && (
-        <p className="mt-2 text-xs text-slate-400">
+        <p className="mt-2 text-xs text-terminal-dim">
           Few-shots generated: {new Date(proposition.few_shot_generated_at).toLocaleString()}
         </p>
       )}

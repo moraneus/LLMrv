@@ -11,13 +11,15 @@ export default function MonitorStatus({ monitorState }: MonitorStatusProps) {
 
   return (
     <div
-      className="flex items-center gap-2 text-sm"
+      className="flex items-center gap-2 text-xs font-mono"
       data-testid="chat-monitor-status"
     >
       <span
-        className={`h-2 w-2 rounded-full ${allPassing ? "bg-emerald-500" : "bg-red-500"}`}
-      />
-      <span className={allPassing ? "text-emerald-600" : "text-red-600"}>
+        className={`text-sm ${allPassing ? "text-terminal-green" : "text-terminal-red"}`}
+      >
+        {"\u25A0"}
+      </span>
+      <span className={allPassing ? "text-terminal-green font-mono" : "text-terminal-red font-mono"}>
         {allPassing ? "All policies passing" : "Violation detected"}
       </span>
     </div>

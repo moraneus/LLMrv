@@ -25,7 +25,7 @@ export default function SettingsView() {
         className="flex h-full items-center justify-center"
         data-testid="settings-loading"
       >
-        <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+        <Loader2 className="h-8 w-8 animate-spin text-accent" />
       </div>
     );
   }
@@ -37,10 +37,10 @@ export default function SettingsView() {
         data-testid="settings-error"
       >
         <div className="text-center">
-          <p className="text-lg font-medium text-slate-800">
+          <p className="text-terminal-bright font-mono">
             Failed to load settings
           </p>
-          <p className="mt-1 text-sm text-slate-500">{settings.error}</p>
+          <p className="mt-1 text-sm text-terminal-dim">{settings.error}</p>
         </div>
       </div>
     );
@@ -59,7 +59,7 @@ export default function SettingsView() {
       className="mx-auto max-w-3xl space-y-6 p-6"
       data-testid="settings-view"
     >
-      <h2 className="text-xl font-semibold text-slate-800">Settings</h2>
+      <h2 className="text-lg font-mono font-bold text-accent uppercase tracking-wider">Settings</h2>
 
       <OpenRouterConfig
         settings={settings.data}
